@@ -26,21 +26,35 @@ Main Features:
 Usage Example (interpolation):
 --------------
 filename = 'data0075.vtu'
+
 data, names = fast_vtu_reader(filename, blocks=True)
+
 Ngrid_x, Ngrid_y = 1024, 2048
+
 grid_x, grid_y, interp_b1 = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y)
+
 _, _, interp_b2 = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y)
+
 _, _, interp_b3 = interpolate_var_to_grid(data, "b3", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y)
+
 _, _, interp_p = interpolate_var_to_grid(data, "p", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y)
+
 B2 = interp_b1**2 + interp_b2**2 + interp_b3**2
+
 Az_computed = smooth_vect_pot(data, Ngrid_x = Ngrid_x, Ngrid_y = Ngrid_y)
+
 fig, ax = plt.subplots()
+
 p1 = ax.imshow(np.abs(2*interp_p/B2), cmap="hot", origin="lower",
                extent=[data['xpoint'].min(), data['xpoint'].max(), data['ypoint'].min(), data['ypoint'].max()],
                norm=LogNorm(vmax=1e2, vmin=1e-1))
+               
 xmin, xmax = -0.1, 0.1
+
 ymin, ymax = -0.2, 0.2
+
 n_levels = 300
+
 contour = ax.contour(grid_x, grid_y, Az_computed, levels=n_levels, colors='w', linewidths=0.5)
 for collection in contour.collections:
     for path in collection.get_paths():
@@ -50,13 +64,20 @@ for collection in contour.collections:
         line, = ax.plot(x, y, color=collection.get_edgecolor(), linewidth=0.5)
         line.set_visible(False)
         add_arrow(line)
+        
 ax.set_xlabel('$x/L$')
+
 ax.set_ylabel('$y/L$')
+
 cbar = fig.colorbar(p1, ax=ax, pad=0.05,  extend=determine_extend_from_plot(p1), orientation='horizontal',  location='top')
 cbar.set_label('$\\beta$')
+
 plot_cells(data, fig=fig, ax=ax, linewidth=0.25, color='w', x_range=(xmin,xmax), y_range=(ymin,ymax))
+
 ax.set_xlim(xmin, xmax)
+
 ax.set_ylim(ymin ,ymax)
+
 plt.show()
 
 --------------
