@@ -34,7 +34,6 @@ _, _, interp_b3 = interpolate_var_to_grid(data, "b3", Ngrid_x=Ngrid_x, Ngrid_y=N
 _, _, interp_p = interpolate_var_to_grid(data, "p", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y)
 B2 = interp_b1**2 + interp_b2**2 + interp_b3**2
 Az_computed = smooth_vect_pot(data, Ngrid_x = Ngrid_x, Ngrid_y = Ngrid_y)
-
 fig, ax = plt.subplots()
 p1 = ax.imshow(np.abs(2*interp_p/B2), cmap="hot", origin="lower",
                extent=[data['xpoint'].min(), data['xpoint'].max(), data['ypoint'].min(), data['ypoint'].max()],
@@ -53,7 +52,6 @@ for collection in contour.collections:
         add_arrow(line)
 ax.set_xlabel('$x/L$')
 ax.set_ylabel('$y/L$')
-# ax.set_aspect('equal')
 cbar = fig.colorbar(p1, ax=ax, pad=0.05,  extend=determine_extend_from_plot(p1), orientation='horizontal',  location='top')
 cbar.set_label('$\\beta$')
 plot_cells(data, fig=fig, ax=ax, linewidth=0.25, color='w', x_range=(xmin,xmax), y_range=(ymin,ymax))
