@@ -327,8 +327,7 @@ def calculate_cell_centers(data):
     return cell_centers_x, cell_centers_y
 
 
-
-def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest'):
+def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None):
     """
     Interpolates the specified variable from cell center data onto a uniform 2D grid.
 
@@ -338,12 +337,13 @@ def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='neare
     - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
     - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
     - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
 
     Returns:
     - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
-            and the interpolated variable on the uniform grid.
+              and the interpolated variable on the uniform grid.
     """
-
 
     print('===============================')
     print(f"Started interpolating")
@@ -351,13 +351,35 @@ def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='neare
 
     center_x, center_y = data["center_x"], data["center_y"]
 
+    # Create initial mask for both x and y
+    mask = np.ones(center_x.shape, dtype=bool)
 
-    # Create a uniform grid based on the range of x and y
-    grid_x, grid_y = np.linspace(center_x.min(), center_x.max(), Ngrid_x), np.linspace(center_y.min(), center_y.max(), Ngrid_y)
+    # Apply spatial filtering based on the provided x_range
+    if x_range is not None:
+        x_mask = (center_x >= x_range[0]) & (center_x <= x_range[1])
+        mask &= x_mask  # Combine with the overall mask
+
+    # Apply spatial filtering based on the provided y_range
+    if y_range is not None:
+        y_mask = (center_y >= y_range[0]) & (center_y <= y_range[1])
+        mask &= y_mask  # Combine with the overall mask
+
+    # Filter the center_x, center_y, and variable data based on the combined mask
+    filtered_center_x = center_x[mask]
+    filtered_center_y = center_y[mask]
+    filtered_var_data = data[var][mask]  # Ensure var data is filtered according to the same mask
+
+    # Create a uniform grid based on the range of filtered x and y
+    grid_x, grid_y = np.linspace(filtered_center_x.min(), filtered_center_x.max(), Ngrid_x), \
+                     np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y)
     grid_x, grid_y = np.meshgrid(grid_x, grid_y)
 
-    # Interpolate point data (point_rho) onto the uniform grid
-    interpolated_var = griddata((center_x, center_y), data[var], (grid_x, grid_y), method=method)
+    # Interpolate point data onto the uniform grid
+    interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_var_data, (grid_x, grid_y), method=method)
+
+    if method == 'linear':
+        # Fill nans with nearest neighbour interpolation, and then check for nans
+        interpolated_var = fill_nan(interpolated_var)
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -365,8 +387,27 @@ def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='neare
     print(f"Time taken to interpolate: {elapsed_time:.4f} seconds")
     print('===============================')
 
-
     return grid_x, grid_y, interpolated_var
+
+def fill_nan(grid):
+    """
+    Fills NaN values in a 2D array using nearest neighbor interpolation.
+
+    Parameters:
+    - grid (ndarray): A 2D array with NaN values that need to be filled.
+
+    Returns:
+    - ndarray: The input array with NaN values filled.
+    """
+    nan_mask = np.isnan(grid)
+    not_nan_mask = ~nan_mask
+    grid[nan_mask] = griddata(
+        (np.where(not_nan_mask)[0], np.where(not_nan_mask)[1]),
+        grid[not_nan_mask],
+        (np.where(nan_mask)[0], np.where(nan_mask)[1]),
+        method='nearest'
+    )
+    return grid
 
 
 def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest'):
