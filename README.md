@@ -63,6 +63,7 @@ plt.show()
 --------------
 Usage Example (raw data plotting):
 --------------
+```
 filename = 'data0075.vtu'
 data, names = fast_vtu_reader(filename, attr={'p', 'b1', 'b2', 'b3'}, blocks=Fale)
 fig, ax = plt.subplots()
@@ -74,7 +75,7 @@ ax.set_ylabel('$y/L$')
 ax.set_xlim(xmin, xmax)
 ax.set_ylim(ymin ,ymax)
 plt.show()
-
+```
 --------------
 Libraries Used:
 --------------
