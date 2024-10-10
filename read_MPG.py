@@ -410,7 +410,7 @@ def fill_nan(grid):
     return grid
 
 
-def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest'):
+def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest',  x_range=None, y_range=None):
     """
     Interpolates the magnetic fields Bx and By, integrates them to obtain the vector potential Az, 
     and applies Gaussian smoothing to the result.
@@ -426,8 +426,8 @@ def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='neare
     - ndarray: The smoothed vector potential Az.
     """
 
-    grid_x, grid_y, Bx_interp = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method)
-    _, _, By_interp = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method)
+    grid_x, grid_y, Bx_interp = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range)
+    _, _, By_interp = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range)
 
     F = cumtrapz(Bx_interp, grid_y, axis=0, initial=0)        
     G = cumtrapz(-By_interp, grid_x, axis=1, initial=0) - F        
@@ -445,7 +445,7 @@ def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='neare
     
     return Az_computed
                 
-def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest'):
+def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest',  x_range=None, y_range=None):
     """
     Interpolates the magnetic fields Bx and By, integrates them to obtain the vector potential Az 
     without applying any smoothing.
@@ -460,8 +460,8 @@ def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest'):
     - ndarray: The unsmoothed vector potential Az.
     """
 
-    grid_x, grid_y, Bx_interp = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method)
-    _, _, By_interp = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method)
+    grid_x, grid_y, Bx_interp = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range)
+    _, _, By_interp = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range)
 
     F = cumtrapz(Bx_interp, grid_y, axis=0, initial=0)        
     G = cumtrapz(-By_interp, grid_x, axis=1, initial=0) - F        
