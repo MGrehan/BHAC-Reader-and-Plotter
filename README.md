@@ -56,6 +56,7 @@ ymin, ymax = -0.2, 0.2
 n_levels = 300
 
 contour = ax.contour(grid_x, grid_y, Az_computed, levels=n_levels, colors='w', linewidths=0.5)
+
 for collection in contour.collections:
     for path in collection.get_paths():
         path_data = path.vertices
