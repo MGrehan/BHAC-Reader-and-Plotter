@@ -443,7 +443,7 @@ def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='neare
 
     Az_computed = Az_smooth
     
-    return Az_computed
+    return grid_x, grid_y, Az_computed
                 
 def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest',  x_range=None, y_range=None):
     """
@@ -470,7 +470,7 @@ def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest',  x
     # Az_computed[:, -1] = Az_computed[:, 0]
     # Az_computed[-1, :] = Az_computed[0, :]
     
-    return Az_computed
+    return grid_x, grid_y, Az_computed
     
 def add_arrow(line, position=None, direction='right', size=7, color=None):
     """
