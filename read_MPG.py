@@ -98,11 +98,13 @@ import base64
 from scipy.integrate import cumtrapz
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import NearestNDInterpolator
+from scipy.interpolate import LinearNDInterpolator
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.collections import LineCollection
 from matplotlib.collections import PolyCollection
+
 
 
 def fast_vtu_reader(filename, attr='all', blocks=False):
@@ -344,7 +346,6 @@ def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='neare
     - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
               and the interpolated variable on the uniform grid.
     """
-
     print('===============================')
     print(f"Started interpolating")
     start_time = time.time()
@@ -375,10 +376,85 @@ def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='neare
     grid_x, grid_y = np.meshgrid(grid_x, grid_y)
 
     # Interpolate point data onto the uniform grid
-    interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_var_data, (grid_x, grid_y), method=method)
-
     if method == 'linear':
-        # Fill nans with nearest neighbour interpolation, and then check for nans
+        # Using LinearNDInterpolator for faster linear interpolation
+        interpolator = LinearNDInterpolator((filtered_center_x, filtered_center_y), filtered_var_data)
+        interpolated_var = interpolator(grid_x, grid_y)
+
+    else:
+        interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_var_data, (grid_x, grid_y), method=method)
+
+    # Fill NaNs if using linear interpolation
+    if method == 'linear':
+        interpolated_var = fill_nan(interpolated_var)
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Finished interpolating")
+    print(f"Time taken to interpolate: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return grid_x, grid_y, interpolated_var
+
+
+
+def interpolate_vect_pot_to_grid(data, Az, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None):
+    """
+    Interpolates the specified variable from cell center data onto a uniform 2D grid.
+
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y', and the variable to interpolate.
+    - var (str): The key in the `data` dictionary corresponding to the variable to be interpolated.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+
+    Returns:
+    - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
+              and the interpolated variable on the uniform grid.
+    """
+    print('===============================')
+    print(f"Started interpolating")
+    start_time = time.time()
+
+    center_x, center_y = data["center_x"], data["center_y"]
+
+    # Create initial mask for both x and y
+    mask = np.ones(center_x.shape, dtype=bool)
+
+    # Apply spatial filtering based on the provided x_range
+    if x_range is not None:
+        x_mask = (center_x >= x_range[0]) & (center_x <= x_range[1])
+        mask &= x_mask  # Combine with the overall mask
+
+    # Apply spatial filtering based on the provided y_range
+    if y_range is not None:
+        y_mask = (center_y >= y_range[0]) & (center_y <= y_range[1])
+        mask &= y_mask  # Combine with the overall mask
+
+    # Filter the center_x, center_y, and variable data based on the combined mask
+    filtered_center_x = center_x[mask]
+    filtered_center_y = center_y[mask]
+    filtered_Az = Az[mask]  # Ensure var data is filtered according to the same mask
+
+    # Create a uniform grid based on the range of filtered x and y
+    grid_x, grid_y = np.linspace(filtered_center_x.min(), filtered_center_x.max(), Ngrid_x), \
+                     np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y)
+    grid_x, grid_y = np.meshgrid(grid_x, grid_y)
+
+    # Interpolate point data onto the uniform grid
+    if method == 'linear':
+        # Using LinearNDInterpolator for faster linear interpolation
+        interpolator = LinearNDInterpolator((filtered_center_x, filtered_center_y), filtered_Az)
+        interpolated_var = interpolator(grid_x, grid_y)
+
+    else:
+        interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_Az, (grid_x, grid_y), method=method)
+
+    # Fill NaNs if using linear interpolation
+    if method == 'linear':
         interpolated_var = fill_nan(interpolated_var)
 
     end_time = time.time()
@@ -400,15 +476,19 @@ def fill_nan(grid):
     - ndarray: The input array with NaN values filled.
     """
     nan_mask = np.isnan(grid)
-    not_nan_mask = ~nan_mask
-    grid[nan_mask] = griddata(
-        (np.where(not_nan_mask)[0], np.where(not_nan_mask)[1]),
-        grid[not_nan_mask],
-        (np.where(nan_mask)[0], np.where(nan_mask)[1]),
-        method='nearest'
-    )
+    if np.any(nan_mask):
+        # Find the indices of non-NaN values
+        x_non_nan, y_non_nan = np.where(~nan_mask)
+        non_nan_values = grid[~nan_mask]
+        
+        # Fill NaN values with nearest neighbor interpolation
+        grid[nan_mask] = griddata(
+            (x_non_nan, y_non_nan),
+            non_nan_values,
+            (np.where(nan_mask)[0], np.where(nan_mask)[1]),
+            method='nearest'
+        )
     return grid
-
 
 def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest',  x_range=None, y_range=None):
     """
@@ -443,6 +523,7 @@ def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='neare
 
     Az_computed = Az_smooth
     
+    
     return grid_x, grid_y, Az_computed
                 
 def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest',  x_range=None, y_range=None):
@@ -471,6 +552,7 @@ def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest',  x
     # Az_computed[-1, :] = Az_computed[0, :]
     
     return grid_x, grid_y, Az_computed
+
     
 def add_arrow(line, position=None, direction='right', size=7, color=None):
     """
@@ -734,7 +816,10 @@ def plot_cells(data, fig=None, ax=None, linewidth=0.1, color='k',
 
 
 
-def plot_raw_data_cells(data, field_data, fig=None, ax=None, x_range=None, y_range=None, vmin=None, vmax=None, cmap='viridis', label=None, edgecolors=None, linewidths=0.1, orientation='vertical',  location='right', use_log_norm=False, pad=0.1):
+def plot_raw_data_cells(data, field_data, fig=None, ax=None, x_range=None, y_range=None, 
+                        vmin=None, vmax=None, cmap='viridis', label=None, 
+                        edgecolors=None, linewidths=0.1, orientation='vertical',  
+                        location='right', use_log_norm=False, pad=0.1, colorbar=True):
     """
     Plots raw simulation data by filling each cell based on the field value associated with that cell.
 
@@ -832,25 +917,32 @@ def plot_raw_data_cells(data, field_data, fig=None, ax=None, x_range=None, y_ran
         # Create a log normalization instance
         norm = LogNorm(vmin=vmin, 
                    vmax=vmax)
-        poly_collection = PolyCollection(polygons, norm=norm, array=filtered_field_data, cmap=cmap, edgecolors=edgecolors, clim=(vmin,vmax), linewidths=linewidths)
+        poly_collection = PolyCollection(polygons, norm=norm, array=filtered_field_data, 
+                                         cmap=cmap, edgecolors=edgecolors, 
+                                         clim=(vmin,vmax), linewidths=linewidths)
 
     else:
         # Create a PolyCollection with the polygons and color them by field data
-        poly_collection = PolyCollection(polygons, array=filtered_field_data, cmap=cmap, edgecolors=edgecolors, clim=(vmin,vmax), linewidths=linewidths)
+        poly_collection = PolyCollection(polygons, array=filtered_field_data, 
+                                         cmap=cmap, edgecolors=edgecolors, 
+                                         clim=(vmin,vmax), linewidths=linewidths)
     ax.add_collection(poly_collection)
     
-    # Determine extend based on comparisons
-    extend_type = 'neither'  # Default
-    if np.any(filtered_field_data < vmin):
-        extend_type = 'min'
-    if np.any(filtered_field_data > vmax):
-        extend_type = 'max'
-    if np.any(filtered_field_data < vmin) and np.any(filtered_field_data > vmax):
-        extend_type = 'both'
-            
+
 
     # Add colorbar with 'extend' parameter determined from the data
-    cbar = plt.colorbar(poly_collection, ax=ax, extend=extend_type, label=label, orientation=orientation, location=location, pad=pad)
+    if colorbar:
+        # Determine extend based on comparisons
+        extend_type = 'neither'  # Default
+        if np.any(filtered_field_data < vmin):
+            extend_type = 'min'
+        if np.any(filtered_field_data > vmax):
+            extend_type = 'max'
+        if np.any(filtered_field_data < vmin) and np.any(filtered_field_data > vmax):
+            extend_type = 'both'
+        cbar = plt.colorbar(poly_collection, ax=ax, extend=extend_type, 
+                            label=label, orientation=orientation, location=location, 
+                            pad=pad)
 
     # Set plot limits
     # ax.set_xlim(x_range if x_range is not None else (x.min(), x.max()))
