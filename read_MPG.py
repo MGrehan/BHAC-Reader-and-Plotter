@@ -958,3 +958,54 @@ def plot_raw_data_cells(data, field_data, fig=None, ax=None, x_range=None, y_ran
     print('===============================')
 
     return fig, ax
+
+
+
+def extract_1d_slice(data, axis, slice_value, vars, tol=1e-5):
+    """
+    Extract a 1D slice of the data from a 2D grid, along a specified axis.
+
+    Args:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y', 
+    and the variable to interpolate.
+    - axis (int): the axis to slice along (0 for x, 1 for y).
+    - slice_value (float): the value of the axis where the slice should be taken.
+    - vars (dict): any number of cell-centered data arrays names to slice eg {"b1", "b2"}.
+    - tol: tolerance of finding cells near slice_value along slice. 
+        
+    Returns:
+    - tuple: tuple containing the coordinates along the slice and the sliced variables 
+    as a list of lists of more than one variable is sliced
+    """
+    
+    print('===============================')
+    print("Started 1d slice")
+    start_time = time.time()
+
+    
+    center_x, center_y = data["center_x"], data["center_y"]
+
+    # Choose the axis for slicing (0 = x-axis, 1 = y-axis)
+    if axis == 0:  # Slice along x (i.e., fixed x = slice_value)
+        slice_indices = np.isclose(center_x, slice_value, atol=tol)
+        slice_coord = center_y[slice_indices]
+    elif axis == 1:  # Slice along y (i.e., fixed y = slice_value)
+        slice_indices = np.isclose(center_y, slice_value, atol=tol)
+        slice_coord = center_x[slice_indices]
+    else:
+        raise ValueError("Invalid axis. Use 0 for x and 1 for y.")
+    
+    if not np.any(slice_indices):
+        raise ValueError(f"No data found for slice at {slice_value} along axis {axis}.")
+    
+    # Extract the slice from each variable
+    sliced_vars = [data[var][slice_indices] for var in vars]
+    
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print("Finished 1d slice")
+    print(f"Time taken: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return slice_coord, sliced_vars
