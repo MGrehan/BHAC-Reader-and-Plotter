@@ -67,7 +67,7 @@ Usage Example (raw data plotting):
 --------------
 ```
 filename = 'data0075.vtu'
-data, names = fast_vtu_reader(filename, attr={'p', 'b1', 'b2', 'b3'}, blocks=Fale)
+data, names = fast_vtu_reader(filename, attr={'p', 'b1', 'b2', 'b3'}, blocks=False)
 fig, ax = plt.subplots()
 xmin, xmax = -0.01, -0.007
 ymin, ymax = -0.001, 0.001
