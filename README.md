@@ -13,6 +13,7 @@ VTU files, extract relevant data fields, and return them in a format suitable fo
 numerical analysis and visualization.
 ------------------------------------------------------------------------------------
 
+
 --------------
 Main Features:
 --------------
@@ -23,6 +24,9 @@ Main Features:
 - Plotting of vector potential contour lines and arrows
 - Plotting of cell boundaries
 - Plotting of block boundaries
+- Plotting of raw simulation data
+- 1d slicing of raw simulation data
+
 
 --------------
 Usage Example (interpolation):
