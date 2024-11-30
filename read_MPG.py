@@ -82,6 +82,33 @@ ax.set_ylim(ymin ,ymax)
 plt.show()
 
 --------------
+Usage Example (polar plotting):
+--------------
+filename = '/Users/michaelgrehan/Desktop/data0001.vtu'
+data, names = fast_vtu_reader(filename, blocks=False)
+xmin, xmax = 0, 20
+ymin, ymax = -25, 25
+Ngrid = 1024
+fig, ax = plt.subplots(figsize=(5,7))
+grid_x, grid_y, interp_b1 = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid, 
+                                                    Ngrid_y=Ngrid, x_range=(xmin,xmax), 
+                                                    y_range=(ymin, ymax))
+grid_x, grid_y, interp_b2 = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid, 
+                                                    Ngrid_y=Ngrid, x_range=(xmin,xmax), 
+                                                    y_range=(ymin, ymax))
+p1, _, _ = plot_polar_data_cells_continuous(data, 
+                                ((data['center_x']**2 + data['center_y']**2)**(3/2)) * data['b1'], 
+                                 fig=fig, ax=ax, label='$r^3 B^{r}/B_\\star$', 
+                                 x_range=(xmin,xmax), y_range=(ymin, ymax), 
+                                 resolution = Ngrid,
+                                 colorbar=None, cmap=cmr.wildfire)
+cbar = fig.colorbar(p1, ax=ax, pad=0.01,  
+                    extend=determine_extend_from_plot(p1), label='$r^3 B^{x}/B_\\star$')
+ax.streamplot(grid_x, grid_y, interp_b1, interp_b2, color='w', linewidth=0.75, 
+              broken_streamlines=False, density=0.35)
+plt.show()
+
+--------------
 Libraries Used:
 --------------
 - struct: For handling binary data.
