@@ -12,6 +12,7 @@ VTU files, extract relevant data fields, and return them in a format suitable fo
 numerical analysis and visualization.
 ------------------------------------------------------------------------------------
 
+
 --------------
 Main Features:
 --------------
@@ -24,6 +25,7 @@ Main Features:
 - Plotting of block boundaries
 - Plotting of raw simulation data
 - 1d slicing of raw simulation data
+
 
 --------------
 Usage Example (interpolation):
@@ -135,9 +137,17 @@ def fast_vtu_reader(filename, attr='all', blocks=False):
         raise ValueError("AppendedData section not found")
 
     data_start = content.find(b'_', appended_data_start) + 1
-
     xml_content = content[:appended_data_start].decode('utf-8', errors='ignore')
     root = ET.fromstring(xml_content + '</VTKFile>')
+    
+    data = {}
+    
+    time_field = root.find(".//FieldData/DataArray[@Name='TIME']")
+    if time_field is not None:
+        data['time'] = float(time_field.text.strip())
+        print(f"Extracted time: {data['time']}")
+    else:
+        print("No time field found in the file.")
 
     pieces = root.findall('.//Piece')
     num_pieces = len(pieces)
@@ -148,7 +158,6 @@ def fast_vtu_reader(filename, attr='all', blocks=False):
     print(f"Cells per piece: {cells_per_piece}")
     print(f"Total number of cells: {total_cells}")
 
-    data = {}
     # Get all unique DataArray names
     data_array_names = set()
     for piece in pieces:
@@ -959,7 +968,7 @@ def plot_raw_data_cells(data, field_data, fig=None, ax=None, x_range=None, y_ran
     print(f"Time taken: {elapsed_time:.4f} seconds")
     print('===============================')
 
-    return fig, ax
+    return poly_collection, fig, ax
 
 
 
