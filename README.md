@@ -102,7 +102,7 @@ grid_x, grid_y, interp_b2 = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid,
                                                     y_range=(ymin, ymax))
 p1, _, _ = plot_polar_data_cells_continuous(data, 
                                 ((data['center_x']**2 + data['center_y']**2)**(3/2)) * data['b1'], 
-                                 fig=fig, ax=ax, label='$r^3 B^{r}/B_\\star$', 
+                                 fig=fig, ax=ax, label='$r^3 B^{x}/B_\\star$', 
                                  x_range=(xmin,xmax), y_range=(ymin, ymax), 
                                  resolution = Ngrid,
                                  colorbar=None, cmap=cmr.wildfire)
