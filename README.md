@@ -113,6 +113,49 @@ ax.streamplot(grid_x, grid_y, interp_b1, interp_b2, color='w', linewidth=0.75,
 plt.show()
 ```
 
+
+--------------
+Usage Example (plotting sliced data from 3D simulation):
+--------------
+```
+filename = '/Users/michaelgrehan/Downloads/data_d3_x+0.00D+00_n0000.vtu'
+data, names = fast_vtu_reader_ascii(filename, slicedir='z') 
+fig, ax = plt.subplots()
+xmin, xmax = -0.5, 0.5
+ymin, ymax = -0.5, 0.5
+plot_raw_data_cells(data, data['b1'], fig=fig, ax=ax, x_range=(xmin,xmax), y_range=(ymin,ymax), cmap='cmr.iceburn', label='$B_x$', linewidths=0.1, edgecolors='k', orientation='horizontal',  location='top', use_log_norm=False)
+ax.set_xlabel('$x/L$')
+ax.set_ylabel('$y/L$')
+ax.set_xlim(xmin, xmax)
+ax.set_ylim(ymin ,ymax)
+plt.show() 
+```
+
+--------------
+Usage Example (plotting sliced 3D polar data in 2D with slicing):
+--------------
+```
+filename = '/Users/michaelgrehan/Downloads/data0003.vtu'
+data, names = fast_vtu_reader(filename, blocks=False)
+x, y, z = calculate_cell_centers_3d(data)
+r = np.sqrt(x**2 + y**2 + z**2)
+theta = np.arccos(z / r)
+phi = np.arctan2(y, x)
+t = data['time']
+br = data['b1']*np.sin(theta)*np.cos(phi) + data['b2']*np.sin(theta)*np.sin(phi)+data['b3']*np.cos(theta)
+fig, ax = plt.subplots(figsize=(7,6.5))
+plot_interpolated_2d_slice(data,
+                           br*(r**3),
+                           slice_direction='xz', fig=fig, ax=ax, cmap='cmr.ember',
+                           label='$\\left( r/R_{\\rm{NS}} \\right)^3 B^r/B_\\star$',
+                                                      atol=5e-3,slice_position=0.0,
+                           vmax=2.0, vmin=1.0)
+
+ax.streamplot(grid_x, grid_y, interp_b1, interp_b3, color='w', linewidth=0.75, 
+                broken_streamlines=False, density=0.35)  
+ax.set_title(f'$t/t_c = {t:.2f}$') 
+plt.show() 
+```
 --------------
 Libraries Used:
 --------------
