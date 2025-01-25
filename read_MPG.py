@@ -109,7 +109,7 @@ ax.streamplot(grid_x, grid_y, interp_b1, interp_b2, color='w', linewidth=0.75,
 plt.show()
 
 --------------
-Usage Example (plotting sliced data from 3D simulation):
+Usage Example (plotting sliced data from 3D simulation, point wise data):
 --------------
 filename = '/Users/michaelgrehan/Downloads/data_d3_x+0.00D+00_n0000.vtu'
 data, names = fast_vtu_reader_ascii(filename, slicedir='z') 
@@ -1240,7 +1240,7 @@ def plot_polar_data_cells_continuous(data, field_data, fig=None, ax=None, x_rang
 
 
 
-def fast_vtu_reader_ascii(filename, attr='all', blocks=False, slicedir='z'):
+def fast_vtu_reader_ascii(filename, attr='all', blocks=False, slicedir='z', cc=True, con2prim=True, rrmhd=True):
     """
     Reads a VTU file produced by BHAC for 2D simulations, assuming the data is in ASCII format.
     Need to tell it direction of slice, assumes along z.
@@ -1253,7 +1253,11 @@ def fast_vtu_reader_ascii(filename, attr='all', blocks=False, slicedir='z'):
     - filename: str, path to the VTU file.
     - attr: list or 'all', attributes to extract (default is 'all').
     - blocks: bool, whether to compute block boundaries for visualization (default is False).
-    - blocks: str, tell the direction of slice (default is 'z').
+    - slicedir: str, tell the direction of slice (default is 'z').
+    - cc: bool, if data is cell centered or not (default is True).
+    - con2prim: bool, if you want data converted to prim variables (default is True).
+    - rrmhd: bool, if rrmhd sim, changes how E is calculated for con2prim (default is True).
+
 
     Returns:
     - data: dict, containing extracted points, attributes, and calculated cell centers.
@@ -1408,219 +1412,54 @@ def fast_vtu_reader_ascii(filename, attr='all', blocks=False, slicedir='z'):
         data["center_x"], data["center_y"] = calculate_cell_centers(data)
     
     
-    
-    # List of keys to exclude
-    exclude_keys = ['time', 'xpoint', 'ypoint', 'zpoint', 'offsets', 'connectivity',
-                     'ncells', 'center_x', 'center_y', 'center_z', 'block_coord']
+    if not cc:
+        # List of keys to exclude
+        exclude_keys = ['time', 'xpoint', 'ypoint', 'zpoint', 'offsets', 'connectivity',
+                        'ncells', 'center_x', 'center_y', 'center_z', 'block_coord']
 
-    # Create a new dictionary with the excluded keys removed
-    data_dict = {key: value for key, value in data.items() if key not in exclude_keys}
+        # Create a new dictionary with the excluded keys removed
+        data_dict = {key: value for key, value in data.items() if key not in exclude_keys}
 
-    # For some reason the field data is on the cell corners, need to move it the centers
-    ncells = data['ncells']
-    
-    offsets = data['offsets']
-    connectivity = data['connectivity']
-    # Create mod_conn array using broadcasting instead of a for loop
-    base_conn = connectivity[:np.max(offsets)]  # Base mod_conn for the first set
-    num_iterations = int(4 * ncells / np.max(offsets))  # Number of iterations
-
-    # Use broadcasting to create mod_conn without a loop
-    offsets_array = np.arange(num_iterations) * (np.max(base_conn) + 1)  # Calculate all offsets at once
-    mod_conn = base_conn + offsets_array[:, None]  # Broadcast and add offsets
-    
-    # Flatten mod_conn to a 1D array
-    mod_conn = mod_conn.ravel()[:ncells * 4]  # Only take enough entries for ncells
-
-    # Reshape mod_conn to group cell vertices (ncells x 4)
-    cell_vertices = mod_conn.reshape(ncells, 4)
-
-    for key in data_dict:
-        data[key] = np.mean(data[key][cell_vertices], axis=1)
+        # For some reason the field data is on the cell corners, need to move it the centers
+        ncells = data['ncells']
         
-    # # Vectorized calculation of cell centers
-    # cell_centers_b1 = np.mean(b1[cell_vertices], axis=1)
+        offsets = data['offsets']
+        connectivity = data['connectivity']
+        # Create mod_conn array using broadcasting instead of a for loop
+        base_conn = connectivity[:np.max(offsets)]  # Base mod_conn for the first set
+        num_iterations = int(4 * ncells / np.max(offsets))  # Number of iterations
 
-    
-
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    print(f"Finished reading file: {filename}")
-    print(f"Time taken to read: {elapsed_time:.4f} seconds")
-    print('===============================')
-
-    return data, list(data.keys())
-
-
-
-
-
-def fast_vtu_reader_ascii_cc(filename, attr='all', blocks=False, slicedir='z'):
-    """
-    Reads a VTU file produced by BHAC for 2D simulations, assuming the data is in ASCII format.
-    Need to tell it direction of slice, assumes along z.
-    It will always output cell centers x and y but that is just so it will work with the 
-    plotting function, in reality center_x and center_y are the coordinates not sliced along,
-    eg if slice along x then center_x is y and center_y is z.
-    This is only for if the vtu is cell centered.
-    
-    Parameters:
-    - filename: str, path to the VTU file.
-    - attr: list or 'all', attributes to extract (default is 'all').
-    - blocks: bool, whether to compute block boundaries for visualization (default is False).
-    - blocks: str, tell the direction of slice (default is 'z').
-
-    Returns:
-    - data: dict, containing extracted points, attributes, and calculated cell centers.
-    - data_keys: list, names of the data arrays present in the file.
-    """
-    
-    print('===============================')
-    print(f"Starting to read file: {filename}")
-    start_time = time.time()
-
-    with open(filename, 'r') as f:
-        content = f.read()
-
-    # Parse the XML part of the file
-    xml_content_start = content.find('<VTKFile')
-    xml_content_end = content.find('</VTKFile>') + len('</VTKFile>')
-    xml_content = content[xml_content_start:xml_content_end]
-    
-    root = ET.fromstring(xml_content)
-    
-    data = {}
-    
-    time_field = root.find(".//FieldData/DataArray[@Name='TIME']")
-    if time_field is not None:
-        data['time'] = float(time_field.text.strip())
-        print(f"Extracted time: {data['time']}")
-    else:
-        print("No time field found in the file.")
-
-    pieces = root.findall('.//Piece')
-    num_pieces = len(pieces)
-    print(f"Number of Pieces: {num_pieces}")
-
-    cells_per_piece = int(pieces[0].get('NumberOfCells'))
-    total_cells = cells_per_piece * num_pieces
-    print(f"Cells per piece: {cells_per_piece}")
-    print(f"Total number of cells: {total_cells}")
-
-    # Get all unique DataArray names
-    data_array_names = set()
-    for piece in pieces:
-        for data_array in piece.findall('.//DataArray'):
-            data_array_names.add(data_array.get('Name'))
-
-    # Read Points (x, y, z coordinates)
-    points_data = []
-    block_boundaries = []
-    for piece in pieces:
-        points_data_array = piece.find('.//Points/DataArray')
-        if points_data_array is None:
-            raise ValueError("Points data not found")
-
-        dtype = points_data_array.get('type')
-        format = points_data_array.get('format')
-
-        # Read ASCII data
-        raw_data = points_data_array.text.strip().split()
+        # Use broadcasting to create mod_conn without a loop
+        offsets_array = np.arange(num_iterations) * (np.max(base_conn) + 1)  # Calculate all offsets at once
+        mod_conn = base_conn + offsets_array[:, None]  # Broadcast and add offsets
         
-        if dtype == 'Float32':
-            parsed_data = np.array(raw_data, dtype=np.float32)
-        elif dtype == 'Float64':
-            parsed_data = np.array(raw_data, dtype=np.float64)
-        else:
-            raise ValueError(f"Unsupported data type for Points: {dtype}")
-        
-        points_data.append(parsed_data)
-        
-        if blocks:
-            # Reshape the parsed data for this piece
-            piece_points = parsed_data.reshape(-1, 3)
+        # Flatten mod_conn to a 1D array
+        mod_conn = mod_conn.ravel()[:ncells * 4]  # Only take enough entries for ncells
 
-            # Vectorized min and max operations for this piece
-            x_min, y_min = np.min(piece_points[:, :2], axis=0)
-            x_max, y_max = np.max(piece_points[:, :2], axis=0)
+        # Reshape mod_conn to group cell vertices (ncells x 4)
+        cell_vertices = mod_conn.reshape(ncells, 4)
 
-            # Define block corners for this piece
-            corners = np.array([
-                [x_min, y_min],
-                [x_max, y_min],
-                [x_max, y_max],
-                [x_min, y_max],
-                [x_min, y_min]  # Close the loop
-            ])
-
-            # Create block boundaries for this piece
-            piece_boundaries = np.array([corners[:-1], corners[1:]]).transpose(1, 0, 2)
+        for key in data_dict:
+            data[key] = np.mean(data[key][cell_vertices], axis=1)
             
-            block_boundaries.append(piece_boundaries)
+        # # Vectorized calculation of cell centers
+        # cell_centers_b1 = np.mean(b1[cell_vertices], axis=1)
+        
+    if con2prim:
+        
+        if rrmhd:
+            esqr = data['e1']**2 + data['e2']**2 + data['e3']**2
+        else:
+            data['e1'] = - (data['v2']*data['b3'] - data['v3']*data['b2'])
+            data['e2'] = (data['v1']*data['b3'] - data['v3']*data['b1'])
+            data['e3'] = - (data['v1']*data['b2'] - data['v2']*data['b1'])
+            esqr = data['e1']**2 + data['e2']**2 + data['e3']**2
+            
+        bsqr = data['b1']**2 + data['b2']**2 + data['b3']**2
 
-    if blocks:
-        data['block_coord'] = np.array(block_boundaries)
+        data['rho'] = data['d']/data['lfac']
+        data['p'] = data['xi'] - data['d'] - data['tau'] + (1/2) * (esqr + bsqr)
 
-    if points_data:
-        points = np.concatenate(points_data).reshape(-1, 3)  # Assuming 3D points (x, y, z)
-        data['xpoint'], data['ypoint'], data['zpoint'] = points[:, 0], points[:, 1], points[:, 2]
-        print(f"Extracted {len(data['xpoint'])} points")
-
-    # Handle attributes
-    if attr == 'all':
-        data_array_names.discard(None)
-        data_array_names.discard('types')
-    else:
-        data_array_names = attr
-        data_array_names.add('connectivity')
-        data_array_names.add('offsets')
-
-    for name in data_array_names:
-        combined_data = []
-
-        for piece in pieces:
-            piece_data_array = piece.find(f".//DataArray[@Name='{name}']")
-            if piece_data_array is None:
-                continue
-
-            dtype = piece_data_array.get('type')
-            format = piece_data_array.get('format')
-
-            # Read ASCII data
-            raw_data = piece_data_array.text.strip().split()
-
-            if dtype == 'Float32':
-                parsed_data = np.array(raw_data, dtype=np.float32)
-            elif dtype == 'Float64':
-                parsed_data = np.array(raw_data, dtype=np.float64)
-            elif dtype == 'Int32':
-                parsed_data = np.array(raw_data, dtype=np.int32)
-            elif dtype == 'Int64':
-                parsed_data = np.array(raw_data, dtype=np.int64)
-            else:
-                raise ValueError(f"Unsupported data type: {dtype}")
-
-            combined_data.append(parsed_data)
-
-        if combined_data:
-            data[name] = np.concatenate(combined_data)
-
-    data["ncells"] = total_cells
-    
-    if slicedir == 'z':
-        x,y,z = data['xpoint'], data['ypoint'], data['zpoint']
-        data["center_x"], data["center_y"] = calculate_cell_centers(data)
-    
-    if slicedir == 'y':
-        x,y,z = data['xpoint'], data['ypoint'], data['zpoint']
-        data['ypoint'] = z
-        data["center_x"], data["center_y"] = calculate_cell_centers(data)
-    
-    if slicedir == 'x':
-        x,y,z = data['xpoint'], data['ypoint'], data['zpoint']
-        data['xpoint'] = y
-        data['ypoint'] = z
-        data["center_x"], data["center_y"] = calculate_cell_centers(data)
     
 
     end_time = time.time()
@@ -1630,6 +1469,9 @@ def fast_vtu_reader_ascii_cc(filename, attr='all', blocks=False, slicedir='z'):
     print('===============================')
 
     return data, list(data.keys())
+
+
+
 
 
 
@@ -1939,3 +1781,72 @@ def plot_interpolated_2d_slice(data, field_data, slice_direction='xy', slice_pos
     print('===============================')
 
     return im, fig, ax
+
+
+
+def interpolate_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None):
+    """
+    Interpolates the specified variable from cell center data onto a uniform 2D grid.
+
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y', and the variable to interpolate.
+    - var (str): The key in the `data` dictionary corresponding to the variable to be interpolated.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+
+    Returns:
+    - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
+              and the interpolated variable on the uniform grid.
+    """
+    print('===============================')
+    print(f"Started interpolating")
+    start_time = time.time()
+
+    center_x, center_y = data["center_x"], data["center_y"]
+
+    # Create initial mask for both x and y
+    mask = np.ones(center_x.shape, dtype=bool)
+
+    # Apply spatial filtering based on the provided x_range
+    if x_range is not None:
+        x_mask = (center_x >= x_range[0]) & (center_x <= x_range[1])
+        mask &= x_mask  # Combine with the overall mask
+
+    # Apply spatial filtering based on the provided y_range
+    if y_range is not None:
+        y_mask = (center_y >= y_range[0]) & (center_y <= y_range[1])
+        mask &= y_mask  # Combine with the overall mask
+
+    # Filter the center_x, center_y, and variable data based on the combined mask
+    filtered_center_x = center_x[mask]
+    filtered_center_y = center_y[mask]
+    filtered_var_data = var[mask]  # Ensure var data is filtered according to the same mask
+
+    # Create a uniform grid based on the range of filtered x and y
+    grid_x, grid_y = np.linspace(filtered_center_x.min(), filtered_center_x.max(), Ngrid_x), \
+                     np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y)
+    grid_x, grid_y = np.meshgrid(grid_x, grid_y)
+
+    # Interpolate point data onto the uniform grid
+    if method == 'linear':
+        # Using LinearNDInterpolator for faster linear interpolation
+        interpolator = LinearNDInterpolator((filtered_center_x, filtered_center_y), filtered_var_data)
+        interpolated_var = interpolator(grid_x, grid_y)
+
+    else:
+        interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_var_data, (grid_x, grid_y), method=method)
+
+    # Fill NaNs if using linear interpolation
+    if method == 'linear':
+        interpolated_var = fill_nan(interpolated_var)
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Finished interpolating")
+    print(f"Time taken to interpolate: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return grid_x, grid_y, interpolated_var
