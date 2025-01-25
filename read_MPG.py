@@ -109,6 +109,50 @@ ax.streamplot(grid_x, grid_y, interp_b1, interp_b2, color='w', linewidth=0.75,
 plt.show()
 
 --------------
+Usage Example (plotting sliced data from 3D simulation):
+--------------
+filename = '/Users/michaelgrehan/Downloads/data_d3_x+0.00D+00_n0000.vtu'
+data, names = fast_vtu_reader_ascii(filename, slicedir='z') 
+fig, ax = plt.subplots()
+xmin, xmax = -0.5, 0.5
+ymin, ymax = -0.5, 0.5
+plot_raw_data_cells(data, data['b1'], fig=fig, ax=ax, x_range=(xmin,xmax), y_range=(ymin,ymax), cmap='cmr.iceburn', label='$B_x$', linewidths=0.1, edgecolors='k', orientation='horizontal',  location='top', use_log_norm=False)
+ax.set_xlabel('$x/L$')
+ax.set_ylabel('$y/L$')
+ax.set_xlim(xmin, xmax)
+ax.set_ylim(ymin ,ymax)
+plt.show() 
+
+
+--------------
+Usage Example (plotting sliced 3D polar data in 2D with slicing):
+--------------
+
+filename = '/Users/michaelgrehan/Downloads/data0003.vtu'
+data, names = fast_vtu_reader(filename, blocks=False)
+x, y, z = calculate_cell_centers_3d(data)
+r = np.sqrt(x**2 + y**2 + z**2)
+theta = np.arccos(z / r)
+phi = np.arctan2(y, x)
+t = data['time']
+br = data['b1']*np.sin(theta)*np.cos(phi) + data['b2']*np.sin(theta)*np.sin(phi)+data['b3']*np.cos(theta)
+fig, ax = plt.subplots(figsize=(7,6.5))
+plot_interpolated_2d_slice(data,
+                           br*(r**3),
+                           slice_direction='xz', fig=fig, ax=ax, cmap='cmr.ember',
+                           label='$\\left( r/R_{\\rm{NS}} \\right)^3 B^r/B_\\star$',
+                                                      atol=5e-3,slice_position=0.0,
+                           vmax=2.0, vmin=1.0)
+
+ax.streamplot(grid_x, grid_y, interp_b1, interp_b3, color='w', linewidth=0.75, 
+                broken_streamlines=False, density=0.35)  
+ax.set_title(f'$t/t_c = {t:.2f}$') 
+plt.show() 
+
+
+
+
+--------------
 Libraries Used:
 --------------
 - struct: For handling binary data.
@@ -1186,6 +1230,531 @@ def plot_polar_data_cells_continuous(data, field_data, fig=None, ax=None, x_rang
     elapsed_time = end_time - start_time
     print("Finished plotting continuous polar data")
     print(f"Time taken: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return im, fig, ax
+
+
+
+
+
+
+
+def fast_vtu_reader_ascii(filename, attr='all', blocks=False, slicedir='z'):
+    """
+    Reads a VTU file produced by BHAC for 2D simulations, assuming the data is in ASCII format.
+    Need to tell it direction of slice, assumes along z.
+    It will always output cell centers x and y but that is just so it will work with the 
+    plotting function, in reality center_x and center_y are the coordinates not sliced along,
+    eg if slice along x then center_x is y and center_y is z.
+    
+    Parameters:
+    - filename: str, path to the VTU file.
+    - attr: list or 'all', attributes to extract (default is 'all').
+    - blocks: bool, whether to compute block boundaries for visualization (default is False).
+    - blocks: str, tell the direction of slice (default is 'z').
+
+    Returns:
+    - data: dict, containing extracted points, attributes, and calculated cell centers.
+    - data_keys: list, names of the data arrays present in the file.
+    """
+    
+    print('===============================')
+    print(f"Starting to read file: {filename}")
+    start_time = time.time()
+
+    with open(filename, 'r') as f:
+        content = f.read()
+
+    # Parse the XML part of the file
+    xml_content_start = content.find('<VTKFile')
+    xml_content_end = content.find('</VTKFile>') + len('</VTKFile>')
+    xml_content = content[xml_content_start:xml_content_end]
+    
+    root = ET.fromstring(xml_content)
+    
+    data = {}
+    
+    time_field = root.find(".//FieldData/DataArray[@Name='TIME']")
+    if time_field is not None:
+        data['time'] = float(time_field.text.strip())
+        print(f"Extracted time: {data['time']}")
+    else:
+        print("No time field found in the file.")
+
+    pieces = root.findall('.//Piece')
+    num_pieces = len(pieces)
+    print(f"Number of Pieces: {num_pieces}")
+
+    cells_per_piece = int(pieces[0].get('NumberOfCells'))
+    total_cells = cells_per_piece * num_pieces
+    print(f"Cells per piece: {cells_per_piece}")
+    print(f"Total number of cells: {total_cells}")
+
+    # Get all unique DataArray names
+    data_array_names = set()
+    for piece in pieces:
+        for data_array in piece.findall('.//DataArray'):
+            data_array_names.add(data_array.get('Name'))
+
+    # Read Points (x, y, z coordinates)
+    points_data = []
+    block_boundaries = []
+    for piece in pieces:
+        points_data_array = piece.find('.//Points/DataArray')
+        if points_data_array is None:
+            raise ValueError("Points data not found")
+
+        dtype = points_data_array.get('type')
+        format = points_data_array.get('format')
+
+        # Read ASCII data
+        raw_data = points_data_array.text.strip().split()
+        
+        if dtype == 'Float32':
+            parsed_data = np.array(raw_data, dtype=np.float32)
+        elif dtype == 'Float64':
+            parsed_data = np.array(raw_data, dtype=np.float64)
+        else:
+            raise ValueError(f"Unsupported data type for Points: {dtype}")
+        
+        points_data.append(parsed_data)
+        
+        if blocks:
+            # Reshape the parsed data for this piece
+            piece_points = parsed_data.reshape(-1, 3)
+
+            # Vectorized min and max operations for this piece
+            x_min, y_min = np.min(piece_points[:, :2], axis=0)
+            x_max, y_max = np.max(piece_points[:, :2], axis=0)
+
+            # Define block corners for this piece
+            corners = np.array([
+                [x_min, y_min],
+                [x_max, y_min],
+                [x_max, y_max],
+                [x_min, y_max],
+                [x_min, y_min]  # Close the loop
+            ])
+
+            # Create block boundaries for this piece
+            piece_boundaries = np.array([corners[:-1], corners[1:]]).transpose(1, 0, 2)
+            
+            block_boundaries.append(piece_boundaries)
+
+    if blocks:
+        data['block_coord'] = np.array(block_boundaries)
+
+    if points_data:
+        points = np.concatenate(points_data).reshape(-1, 3)  # Assuming 3D points (x, y, z)
+        data['xpoint'], data['ypoint'], data['zpoint'] = points[:, 0], points[:, 1], points[:, 2]
+        print(f"Extracted {len(data['xpoint'])} points")
+
+    # Handle attributes
+    if attr == 'all':
+        data_array_names.discard(None)
+        data_array_names.discard('types')
+    else:
+        data_array_names = attr
+        data_array_names.add('connectivity')
+        data_array_names.add('offsets')
+
+    for name in data_array_names:
+        combined_data = []
+
+        for piece in pieces:
+            piece_data_array = piece.find(f".//DataArray[@Name='{name}']")
+            if piece_data_array is None:
+                continue
+
+            dtype = piece_data_array.get('type')
+            format = piece_data_array.get('format')
+
+            # Read ASCII data
+            raw_data = piece_data_array.text.strip().split()
+
+            if dtype == 'Float32':
+                parsed_data = np.array(raw_data, dtype=np.float32)
+            elif dtype == 'Float64':
+                parsed_data = np.array(raw_data, dtype=np.float64)
+            elif dtype == 'Int32':
+                parsed_data = np.array(raw_data, dtype=np.int32)
+            elif dtype == 'Int64':
+                parsed_data = np.array(raw_data, dtype=np.int64)
+            else:
+                raise ValueError(f"Unsupported data type: {dtype}")
+
+            combined_data.append(parsed_data)
+
+        if combined_data:
+            data[name] = np.concatenate(combined_data)
+
+    data["ncells"] = total_cells
+    
+    if slicedir == 'z':
+        x,y,z = data['xpoint'], data['ypoint'], data['zpoint']
+        data["center_x"], data["center_y"] = calculate_cell_centers(data)
+    
+    if slicedir == 'y':
+        x,y,z = data['xpoint'], data['ypoint'], data['zpoint']
+        data['ypoint'] = z
+        data["center_x"], data["center_y"] = calculate_cell_centers(data)
+    
+    if slicedir == 'x':
+        x,y,z = data['xpoint'], data['ypoint'], data['zpoint']
+        data['xpoint'] = y
+        data['ypoint'] = z
+        data["center_x"], data["center_y"] = calculate_cell_centers(data)
+    
+    
+    
+    # List of keys to exclude
+    exclude_keys = ['time', 'xpoint', 'ypoint', 'zpoint', 'offsets', 'connectivity',
+                     'ncells', 'center_x', 'center_y', 'center_z', 'block_coord']
+
+    # Create a new dictionary with the excluded keys removed
+    data_dict = {key: value for key, value in data.items() if key not in exclude_keys}
+
+    # For some reason the field data is on the cell corners, need to move it the centers
+    ncells = data['ncells']
+    
+    offsets = data['offsets']
+    connectivity = data['connectivity']
+    # Create mod_conn array using broadcasting instead of a for loop
+    base_conn = connectivity[:np.max(offsets)]  # Base mod_conn for the first set
+    num_iterations = int(4 * ncells / np.max(offsets))  # Number of iterations
+
+    # Use broadcasting to create mod_conn without a loop
+    offsets_array = np.arange(num_iterations) * (np.max(base_conn) + 1)  # Calculate all offsets at once
+    mod_conn = base_conn + offsets_array[:, None]  # Broadcast and add offsets
+    
+    # Flatten mod_conn to a 1D array
+    mod_conn = mod_conn.ravel()[:ncells * 4]  # Only take enough entries for ncells
+
+    # Reshape mod_conn to group cell vertices (ncells x 4)
+    cell_vertices = mod_conn.reshape(ncells, 4)
+
+    for key in data_dict:
+        data[key] = np.mean(data[key][cell_vertices], axis=1)
+        
+    # # Vectorized calculation of cell centers
+    # cell_centers_b1 = np.mean(b1[cell_vertices], axis=1)
+
+    
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Finished reading file: {filename}")
+    print(f"Time taken to read: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return data, list(data.keys())
+
+
+
+
+def calculate_cell_centers_3d(data):
+    """
+    Calculate the cell centers by averaging the vertex coordinates for 3D data.
+
+    Parameters:
+    - data: dict, containing vertex coordinates and connectivity information.
+
+    Returns:
+    - center_x: ndarray, x-coordinates of cell centers.
+    - center_y: ndarray, y-coordinates of cell centers.
+    - center_z: ndarray, z-coordinates of cell centers.
+    """
+
+    print('===============================')
+    print(f"Started finding cell centers (3D)")
+    start_time = time.time()
+    
+    x = data['xpoint']
+    y = data['ypoint']
+    z = data['zpoint']
+    ncells = data['ncells']
+    
+    offsets = data['offsets']
+    connectivity = data['connectivity']
+    
+    # Create mod_conn array using broadcasting instead of a for loop
+    base_conn = connectivity[:np.max(offsets)]  # Base mod_conn for the first set
+    num_iterations = int(8 * ncells / np.max(offsets))  # Number of iterations for 3D (8 vertices per cell)
+
+    # Use broadcasting to create mod_conn without a loop
+    offsets_array = np.arange(num_iterations) * (np.max(base_conn) + 1)  # Calculate all offsets at once
+    mod_conn = base_conn + offsets_array[:, None]  # Broadcast and add offsets
+    
+    # Flatten mod_conn to a 1D array
+    mod_conn = mod_conn.ravel()[:ncells * 8]  # Only take enough entries for ncells (8 vertices per cell)
+
+    # Reshape mod_conn to group cell vertices (ncells x 8)
+    cell_vertices = mod_conn.reshape(ncells, 8)
+
+    # Vectorized calculation of cell centers
+    cell_centers_x = np.mean(x[cell_vertices], axis=1)
+    cell_centers_y = np.mean(y[cell_vertices], axis=1)
+    cell_centers_z = np.mean(z[cell_vertices], axis=1)
+    
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Finished finding cell centers (3D)")
+    print(f"Time taken to get centers: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return cell_centers_x, cell_centers_y, cell_centers_z
+
+
+
+
+
+def interp_2d_slice(data, var, slice_direction='xy', slice_position=0, atol=5e-1, 
+                    Ngrid_x=256, Ngrid_y=256, method='nearest', x_range=None, y_range=None):
+    """
+    Interpolates the specified variable from cell center data onto a uniform 2D grid.
+
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y', and the variable to interpolate.
+    - var (str): The key in the `data` dictionary corresponding to the variable to be interpolated.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+
+    Returns:
+    - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
+              and the interpolated variable on the uniform grid.
+    """
+    print('===============================')
+    print(f"Started interpolating")
+    start_time = time.time()
+
+    x, y, z = calculate_cell_centers_3d(data)
+    coords = {'x': x, 'y': y, 'z': z}
+
+    # Define slice based on slice_direction
+    if slice_direction == 'xy':
+        mask = np.isclose(coords['z'], slice_position, atol=atol)
+        x, y = coords['x'][mask], coords['y'][mask]
+    elif slice_direction == 'yz':
+        mask = np.isclose(coords['x'], slice_position, atol=atol)
+        x, y = coords['y'][mask], coords['z'][mask]
+    elif slice_direction == 'xz':
+        mask = np.isclose(coords['y'], slice_position, atol=atol)
+        x, y = coords['x'][mask], coords['z'][mask]
+    else:
+        raise ValueError("Invalid slice_direction. Use 'xy', 'yz', or 'xz'.")
+    
+    center_x, center_y = x, y
+    
+    # Create initial mask for both x and y
+    mask = np.ones(center_x.shape, dtype=bool)
+
+    # Apply spatial filtering based on the provided x_range
+    if x_range is not None:
+        x_mask = (center_x >= x_range[0]) & (center_x <= x_range[1])
+        mask &= x_mask  # Combine with the overall mask
+
+    # Apply spatial filtering based on the provided y_range
+    if y_range is not None:
+        y_mask = (center_y >= y_range[0]) & (center_y <= y_range[1])
+        mask &= y_mask  # Combine with the overall mask
+
+    # Filter the center_x, center_y, and variable data based on the combined mask
+    filtered_center_x = center_x[mask]
+    filtered_center_y = center_y[mask]
+    filtered_var_data = data[var][mask]  # Ensure var data is filtered according to the same mask
+
+    # Create a uniform grid based on the range of filtered x and y
+    grid_x, grid_y = np.linspace(filtered_center_x.min(), filtered_center_x.max(), Ngrid_x), \
+                     np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y)
+    grid_x, grid_y = np.meshgrid(grid_x, grid_y)
+
+    # Interpolate point data onto the uniform grid
+    if method == 'linear':
+        # Using LinearNDInterpolator for faster linear interpolation
+        interpolator = LinearNDInterpolator((filtered_center_x, filtered_center_y), filtered_var_data)
+        interpolated_var = interpolator(grid_x, grid_y)
+
+    else:
+        interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_var_data, (grid_x, grid_y), method=method)
+
+    # Fill NaNs if using linear interpolation
+    if method == 'linear':
+        interpolated_var = fill_nan(interpolated_var)
+
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Finished interpolating")
+    print(f"Time taken to interpolate: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return grid_x, grid_y, interpolated_var
+
+
+
+def plot_interpolated_2d_slice(data, field_data, slice_direction='xy', slice_position=0, 
+                               resolution=256, fig=None, ax=None, vmin=None, vmax=None, 
+                               cmap='viridis', label=None, colorbar=True, use_log_norm=False, 
+                               atol=1e-2, method='nearest',
+                               x_range=None, y_range=None,
+                               orientation='vertical', location='right',
+                               pad=0.1):
+    """
+    Plots the interpolated data from a 2D slice of a 3D simulation.
+
+    Parameters:
+    - data (dict): Contains 3D coordinate arrays ('x', 'y', 'z') of the simulation data.
+    - field_data (ndarray): 1D array of the field values for interpolation.
+    - slice_direction (str): Direction to slice ('xy', 'yz', 'xz').
+    - slice_position (float): Position along the orthogonal axis for slicing.
+    - resolution (int): Resolution of the interpolated grid.
+    - fig, ax (optional): Matplotlib figure and axis objects.
+    - vmin, vmax (optional): Min/Max values for color mapping.
+    - cmap (str, optional): Colormap used to color the cells.
+    - label (str, optional): Label for the colorbar.
+    - colorbar (bool, optional): Whether to display the colorbar. Default is True.
+    - use_log_norm (bool, optional): If True, apply log normalization.
+
+    Returns:
+    - im: Image object from pcolormesh.
+    - fig, ax: Matplotlib figure and axis objects.
+    """
+    print('===============================')
+    print(f"Plotting a 2D slice in the {slice_direction}-plane at {slice_position}")
+    
+    x, y, z = calculate_cell_centers_3d(data)
+    coords = {'x': x, 'y': y, 'z': z}
+
+    # Define slice based on slice_direction
+    if slice_direction == 'xy':
+        mask = np.isclose(coords['z'], slice_position, atol=atol)
+        x, y = coords['x'][mask], coords['y'][mask]
+    elif slice_direction == 'yz':
+        mask = np.isclose(coords['x'], slice_position, atol=atol)
+        x, y = coords['y'][mask], coords['z'][mask]
+    elif slice_direction == 'xz':
+        mask = np.isclose(coords['y'], slice_position, atol=atol)
+        x, y = coords['x'][mask], coords['z'][mask]
+    else:
+        raise ValueError("Invalid slice_direction. Use 'xy', 'yz', or 'xz'.")
+    
+        
+    radii = np.sqrt(x**2 + y**2)
+    rmin = np.min(radii)
+    rmax = np.max(radii)
+    
+
+    # Calculate the wedge angle from the data
+    angles = np.arctan2(y, x)
+    wedge_min_angle = np.min(angles)
+    wedge_max_angle = np.max(angles)
+    # print(f"Calculated wedge angle: [{wedge_min_angle}, {wedge_max_angle}] radians")
+
+    # Create masks for x_range, y_range, and rmin
+    if x_range is not None:
+        x_min = x_range[0]
+        x_max = x_range[1]
+        x_mask = (x >= x_range[0]) & (x <= x_range[1])
+    else:
+        if np.min(x) < 0:
+            x_min = np.min(x) #-rmax
+        else:
+            x_min = 0
+        if np.max(x) >= 0:
+            x_max = np.max(x) #rmax
+        else:
+            x_max = 0
+        x_mask = np.ones_like(x, dtype=bool)
+
+    if y_range is not None:
+        y_min = y_range[0]
+        y_max = y_range[1]
+        y_mask = (y >= y_range[0]) & (y <= y_range[1])
+    else:
+        if np.min(y) < 0:
+            y_min = np.min(y) #-rmax
+        else:
+            y_min = 0
+        if np.max(y) >= 0:
+            y_max = np.max(y) #rmax
+        else:
+            y_max = 0
+        y_mask = np.ones_like(y, dtype=bool)
+
+    field_slice = field_data[mask]
+
+    r_mask = radii >= rmin
+
+    # Combine all masks
+    mask = x_mask & y_mask & r_mask
+
+    # Filter data points
+    filtered_x = x[mask]
+    filtered_y = y[mask]
+    filtered_field_data = field_slice[mask]
+
+    xi = np.linspace(x_min, x_max, resolution)
+    yi = np.linspace(y_min, y_max, resolution)
+    XI, YI = np.meshgrid(xi, yi)
+
+    points = np.column_stack((filtered_x, filtered_y))
+    grid_z = griddata(points, filtered_field_data, (XI, YI), method=method)
+    
+    # Create a mask for the wedge-shaped region
+    angles_grid = np.arctan2(YI, XI)
+    mask1 = XI**2 + YI**2 <= rmax**2
+    mask2 = XI**2 + YI**2 > rmin**2
+    mask3 = (angles_grid >= wedge_min_angle) & (angles_grid <= wedge_max_angle)
+
+    mask = mask1 & mask2 & mask3
+
+    grid_z = np.ma.masked_where(~mask, grid_z)
+
+    # Create figure and axis if not provided
+    if fig is None or ax is None:
+        fig, ax = plt.subplots()
+
+    # Apply log normalization if requested
+    if use_log_norm:
+        norm = LogNorm(vmin=vmin, vmax=vmax)
+    else:
+        norm = None
+
+    # Set vmin and vmax if not provided
+    if vmin is None:
+        vmin = np.nanmin(grid_z)
+    if vmax is None:
+        vmax = np.nanmax(grid_z)
+
+    im = ax.pcolormesh(XI, YI, grid_z, cmap=cmap, vmin=vmin, vmax=vmax, norm=norm)
+
+    # Add colorbar
+    if colorbar:
+        extend_type = 'neither'
+        if np.any(grid_z < vmin):
+            extend_type = 'min'
+        if np.any(grid_z > vmax):
+            extend_type = 'max'
+        if np.any(grid_z < vmin) and np.any(grid_z > vmax):
+            extend_type = 'both'
+
+        cbar = plt.colorbar(im, ax=ax, extend=extend_type, label=label, 
+                            orientation=orientation, location=location, pad=pad)
+
+    # Set plot limits
+    ax.set_xlim(x_range)
+    ax.set_ylim(y_range)
+
+    # Set labels
+    ax.set_xlabel(f'${slice_direction[0]}$''$/R_{\\rm{NS}}$')
+    ax.set_ylabel(f'${slice_direction[1]}$''$/R_{\\rm{NS}}$')
+    ax.set_aspect('equal')
+
+    print(f"Finished plotting slice in {slice_direction}-plane.")
     print('===============================')
 
     return im, fig, ax
