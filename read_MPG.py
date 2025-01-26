@@ -185,7 +185,7 @@ from joblib import Parallel, delayed
 
 
 
-def fast_vtu_reader(filename, attr='all', blocks=False, twod=True):
+def fast_vtu_reader(filename, attr='all', blocks=False):
     """
     Reads a VTU file produced by BHAC for 2D simulations.
 
@@ -352,11 +352,8 @@ def fast_vtu_reader(filename, attr='all', blocks=False, twod=True):
 
 
     data["ncells"] = total_cells
-    if twod:
-        data["center_x"], data["center_y"] = calculate_cell_centers(data)
-    else:
-        data["center_x"], data["center_y"], data["center_z"] = calculate_cell_centers_3d(data)
-
+    data["center_x"], data["center_y"] = calculate_cell_centers(data)
+   
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"Finished reading file: {filename}")
@@ -1973,7 +1970,8 @@ def interpolate_var_to_grid_3d(data, var, Ngrid_x=2048, Ngrid_y=2048, Ngrid_z=20
     print(f"Started interpolating")
     start_time = time.time()
 
-    center_x, center_y, center_z = data["center_x"], data["center_y"], data["center_z"]
+    # center_x, center_y, center_z = data["center_x"], data["center_y"], data["center_z"]
+    center_x, center_y, center_z = calculate_cell_centers_3d(data)
 
     # Create initial mask for both x and y
     mask = np.ones(center_x.shape, dtype=bool)
