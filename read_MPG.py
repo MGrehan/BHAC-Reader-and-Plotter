@@ -6,7 +6,7 @@ Date: October 2024
 Email: michael.grehan@mail.utoronto.ca
 
 ------------------------------------------------------------------------------------
-This module provides functionality for reading and processing 2D BHAC VTU data files
+This module provides functionality for reading and processing BHAC VTU data files
 that do not include GR effects. The module is designed to read 
 VTU files, extract relevant data fields, and return them in a format suitable for 
 numerical analysis and visualization.
@@ -162,6 +162,7 @@ Libraries Used:
 - base64: For decoding base64-encoded data.
 - scipy.integrate, scipy.ndimage, scipy.interpolate: For interpolation and smoothing.
 - matplotlib.pyplot: For plotting the data.
+- joblib: For parallel stuff.
 """
 
 
@@ -179,6 +180,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.collections import LineCollection
 from matplotlib.collections import PolyCollection
+from joblib import Parallel, delayed
+
 
 
 
@@ -349,7 +352,8 @@ def fast_vtu_reader(filename, attr='all', blocks=False):
 
 
     data["ncells"] = total_cells
-    data["center_x"], data["center_y"] = calculate_cell_centers(data)
+    # data["center_x"], data["center_y"] = calculate_cell_centers(data)
+    data["center_x"], data["center_y"], data["center_z"] = calculate_cell_centers_3d(data)
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -411,7 +415,7 @@ def calculate_cell_centers(data):
     return cell_centers_x, cell_centers_y
 
 
-def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None):
+def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None, cores=1):
     """
     Interpolates the specified variable from cell center data onto a uniform 2D grid.
 
@@ -423,6 +427,7 @@ def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='neare
     - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
     - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
     - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+    - cores (int): Number of cores to use in parallel when interpolating
 
     Returns:
     - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
@@ -457,83 +462,42 @@ def interpolate_var_to_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='neare
                      np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y)
     grid_x, grid_y = np.meshgrid(grid_x, grid_y)
 
-    # Interpolate point data onto the uniform grid
-    if method == 'linear':
-        # Using LinearNDInterpolator for faster linear interpolation
-        interpolator = LinearNDInterpolator((filtered_center_x, filtered_center_y), filtered_var_data)
-        interpolated_var = interpolator(grid_x, grid_y)
+    # Function to interpolate a chunk of the grid
+    def interpolate_chunk(x_chunk, y_chunk):
+        # Apply mask based on the chunk being processed
+        mask_chunk = (filtered_center_x >= x_chunk.min()) & (filtered_center_x <= x_chunk.max()) & \
+                     (filtered_center_y >= y_chunk.min()) & (filtered_center_y <= y_chunk.max())
 
-    else:
-        interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_var_data, (grid_x, grid_y), method=method)
+        # Apply chunk-based filtering to the data
+        filtered_center_x_chunk = filtered_center_x[mask_chunk]
+        filtered_center_y_chunk = filtered_center_y[mask_chunk]
+        filtered_var_data_chunk = filtered_var_data[mask_chunk]
 
-    # Fill NaNs if using linear interpolation
-    if method == 'linear':
-        interpolated_var = fill_nan(interpolated_var)
+        # Interpolate the chunk
+        if method == 'linear':
+            interpolator = LinearNDInterpolator((filtered_center_x_chunk, filtered_center_y_chunk), filtered_var_data_chunk)
+            interpolated_var = interpolator(x_chunk, y_chunk)
+        else:
+            interpolated_var = griddata((filtered_center_x_chunk, filtered_center_y_chunk), filtered_var_data_chunk, 
+                                        (x_chunk, y_chunk), method=method)
 
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    print(f"Finished interpolating")
-    print(f"Time taken to interpolate: {elapsed_time:.4f} seconds")
-    print('===============================')
+        return interpolated_var
 
-    return grid_x, grid_y, interpolated_var
+    # Split the grid into smaller chunks for parallel processing
+    n_chunks = cores  # Adjust this based on your CPU/core count
+    chunk_size = Ngrid_x // n_chunks
 
+    # Create a list of chunks to process
+    x_chunks = [grid_x[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
+    y_chunks = [grid_y[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
 
+    # Parallelize the interpolation process
+    interpolated_var_chunks = Parallel(n_jobs=cores)(
+        delayed(interpolate_chunk)(x_chunk, y_chunk) for x_chunk, y_chunk in zip(x_chunks, y_chunks)
+    )
 
-def interpolate_vect_pot_to_grid(data, Az, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None):
-    """
-    Interpolates the specified variable from cell center data onto a uniform 2D grid.
-
-    Parameters:
-    - data (dict): A dictionary containing the data, including 'center_x', 'center_y', and the variable to interpolate.
-    - var (str): The key in the `data` dictionary corresponding to the variable to be interpolated.
-    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
-    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
-    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
-    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
-    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
-
-    Returns:
-    - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
-              and the interpolated variable on the uniform grid.
-    """
-    print('===============================')
-    print(f"Started interpolating")
-    start_time = time.time()
-
-    center_x, center_y = data["center_x"], data["center_y"]
-
-    # Create initial mask for both x and y
-    mask = np.ones(center_x.shape, dtype=bool)
-
-    # Apply spatial filtering based on the provided x_range
-    if x_range is not None:
-        x_mask = (center_x >= x_range[0]) & (center_x <= x_range[1])
-        mask &= x_mask  # Combine with the overall mask
-
-    # Apply spatial filtering based on the provided y_range
-    if y_range is not None:
-        y_mask = (center_y >= y_range[0]) & (center_y <= y_range[1])
-        mask &= y_mask  # Combine with the overall mask
-
-    # Filter the center_x, center_y, and variable data based on the combined mask
-    filtered_center_x = center_x[mask]
-    filtered_center_y = center_y[mask]
-    filtered_Az = Az[mask]  # Ensure var data is filtered according to the same mask
-
-    # Create a uniform grid based on the range of filtered x and y
-    grid_x, grid_y = np.linspace(filtered_center_x.min(), filtered_center_x.max(), Ngrid_x), \
-                     np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y)
-    grid_x, grid_y = np.meshgrid(grid_x, grid_y)
-
-    # Interpolate point data onto the uniform grid
-    if method == 'linear':
-        # Using LinearNDInterpolator for faster linear interpolation
-        interpolator = LinearNDInterpolator((filtered_center_x, filtered_center_y), filtered_Az)
-        interpolated_var = interpolator(grid_x, grid_y)
-
-    else:
-        interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_Az, (grid_x, grid_y), method=method)
+    # Combine the results from all chunks
+    interpolated_var = np.hstack(interpolated_var_chunks)
 
     # Fill NaNs if using linear interpolation
     if method == 'linear':
@@ -572,7 +536,110 @@ def fill_nan(grid):
         )
     return grid
 
-def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest',  x_range=None, y_range=None):
+
+def interpolate_vect_pot_to_grid(data, Az, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None, cores=1):
+    """
+    Interpolates the specified variable from cell center data onto a uniform 2D grid.
+
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y', and the variable to interpolate.
+    - var (str): The key in the `data` dictionary corresponding to the variable to be interpolated.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+    - cores (int): Number of cores to use in parallel when interpolating
+
+
+    Returns:
+    - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
+              and the interpolated variable on the uniform grid.
+    """
+    print('===============================')
+    print(f"Started interpolating")
+    start_time = time.time()
+
+    center_x, center_y = data["center_x"], data["center_y"]
+
+    # Create initial mask for both x and y
+    mask = np.ones(center_x.shape, dtype=bool)
+
+    # Apply spatial filtering based on the provided x_range
+    if x_range is not None:
+        x_mask = (center_x >= x_range[0]) & (center_x <= x_range[1])
+        mask &= x_mask  # Combine with the overall mask
+
+    # Apply spatial filtering based on the provided y_range
+    if y_range is not None:
+        y_mask = (center_y >= y_range[0]) & (center_y <= y_range[1])
+        mask &= y_mask  # Combine with the overall mask
+
+    # Filter the center_x, center_y, and variable data based on the combined mask
+    filtered_center_x = center_x[mask]
+    filtered_center_y = center_y[mask]
+    filtered_Az = Az[mask]  # Ensure var data is filtered according to the same mask
+
+    # Create a uniform grid based on the range of filtered x and y
+    grid_x, grid_y = np.linspace(filtered_center_x.min(), filtered_center_x.max(), Ngrid_x), \
+                     np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y)
+    grid_x, grid_y = np.meshgrid(grid_x, grid_y)
+    
+    
+    
+    
+    # Function to interpolate a chunk of the grid
+    def interpolate_chunk(x_chunk, y_chunk):
+        # Apply mask based on the chunk being processed
+        mask_chunk = (filtered_center_x >= x_chunk.min()) & (filtered_center_x <= x_chunk.max()) & \
+                     (filtered_center_y >= y_chunk.min()) & (filtered_center_y <= y_chunk.max())
+
+        # Apply chunk-based filtering to the data
+        filtered_center_x_chunk = filtered_center_x[mask_chunk]
+        filtered_center_y_chunk = filtered_center_y[mask_chunk]
+        filtered_var_data_chunk = filtered_Az[mask_chunk]
+
+        # Interpolate the chunk
+        if method == 'linear':
+            interpolator = LinearNDInterpolator((filtered_center_x_chunk, filtered_center_y_chunk), filtered_var_data_chunk)
+            interpolated_var = interpolator(x_chunk, y_chunk)
+        else:
+            interpolated_var = griddata((filtered_center_x_chunk, filtered_center_y_chunk), filtered_var_data_chunk, 
+                                        (x_chunk, y_chunk), method=method)
+
+        return interpolated_var
+
+    # Split the grid into smaller chunks for parallel processing
+    n_chunks = cores  # Adjust this based on your CPU/core count
+    chunk_size = Ngrid_x // n_chunks
+
+    # Create a list of chunks to process
+    x_chunks = [grid_x[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
+    y_chunks = [grid_y[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
+
+    # Parallelize the interpolation process
+    interpolated_var_chunks = Parallel(n_jobs=cores)(
+        delayed(interpolate_chunk)(x_chunk, y_chunk) for x_chunk, y_chunk in zip(x_chunks, y_chunks)
+    )
+
+    # Combine the results from all chunks
+    interpolated_var = np.hstack(interpolated_var_chunks)
+
+    # Fill NaNs if using linear interpolation
+    if method == 'linear':
+        interpolated_var = fill_nan(interpolated_var)
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Finished interpolating")
+    print(f"Time taken to interpolate: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return grid_x, grid_y, interpolated_var
+
+
+
+def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest',  x_range=None, y_range=None, cores=1):
     """
     Interpolates the magnetic fields Bx and By, integrates them to obtain the vector potential Az, 
     and applies Gaussian smoothing to the result.
@@ -583,13 +650,14 @@ def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='neare
     - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
     - sigma (float): The standard deviation for Gaussian smoothing (default is 5).
     - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - cores (int): Number of cores to use in parallel when interpolating
 
     Returns:
     - ndarray: The smoothed vector potential Az.
     """
 
-    grid_x, grid_y, Bx_interp = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range)
-    _, _, By_interp = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range)
+    grid_x, grid_y, Bx_interp = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range, cores=cores)
+    _, _, By_interp = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range, cores=cores)
 
     F = cumtrapz(Bx_interp, grid_y, axis=0, initial=0)        
     G = cumtrapz(-By_interp, grid_x, axis=1, initial=0) - F        
@@ -608,7 +676,7 @@ def smooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='neare
     
     return grid_x, grid_y, Az_computed
                 
-def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest',  x_range=None, y_range=None):
+def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest',  x_range=None, y_range=None, cores=1):
     """
     Interpolates the magnetic fields Bx and By, integrates them to obtain the vector potential Az 
     without applying any smoothing.
@@ -618,13 +686,15 @@ def unsmooth_vect_pot(data, Ngrid_x = 2048, Ngrid_y = 2048, method='nearest',  x
     - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
     - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
     - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - cores (int): Number of cores to use in parallel when interpolating
+
 
     Returns:
     - ndarray: The unsmoothed vector potential Az.
     """
 
-    grid_x, grid_y, Bx_interp = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range)
-    _, _, By_interp = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range)
+    grid_x, grid_y, Bx_interp = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range, cores=cores)
+    _, _, By_interp = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, Ngrid_y=Ngrid_y, method=method, x_range=x_range, y_range=y_range, cores=cores)
 
     F = cumtrapz(Bx_interp, grid_y, axis=0, initial=0)        
     G = cumtrapz(-By_interp, grid_x, axis=1, initial=0) - F        
@@ -1237,9 +1307,6 @@ def plot_polar_data_cells_continuous(data, field_data, fig=None, ax=None, x_rang
 
 
 
-
-
-
 def fast_vtu_reader_ascii(filename, attr='all', blocks=False, slicedir='z', cc=True, con2prim=True, rrmhd=True):
     """
     Reads a VTU file produced by BHAC for 2D simulations, assuming the data is in ASCII format.
@@ -1442,8 +1509,6 @@ def fast_vtu_reader_ascii(filename, attr='all', blocks=False, slicedir='z', cc=T
         for key in data_dict:
             data[key] = np.mean(data[key][cell_vertices], axis=1)
             
-        # # Vectorized calculation of cell centers
-        # cell_centers_b1 = np.mean(b1[cell_vertices], axis=1)
         
     if con2prim:
         
@@ -1784,18 +1849,20 @@ def plot_interpolated_2d_slice(data, field_data, slice_direction='xy', slice_pos
 
 
 
-def interpolate_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None):
+
+def interpolate_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_range=None, y_range=None, cores=1):
     """
     Interpolates the specified variable from cell center data onto a uniform 2D grid.
 
     Parameters:
     - data (dict): A dictionary containing the data, including 'center_x', 'center_y', and the variable to interpolate.
-    - var (str): The key in the `data` dictionary corresponding to the variable to be interpolated.
+    - var (array): The data you want to interpolate. Can be nice for functions of output data.
     - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
     - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
     - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
     - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
     - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+    - cores (int): Number of cores to use in parallel when interpolating
 
     Returns:
     - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
@@ -1830,15 +1897,43 @@ def interpolate_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_
                      np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y)
     grid_x, grid_y = np.meshgrid(grid_x, grid_y)
 
-    # Interpolate point data onto the uniform grid
-    if method == 'linear':
-        # Using LinearNDInterpolator for faster linear interpolation
-        interpolator = LinearNDInterpolator((filtered_center_x, filtered_center_y), filtered_var_data)
-        interpolated_var = interpolator(grid_x, grid_y)
+   
+    # Function to interpolate a chunk of the grid
+    def interpolate_chunk(x_chunk, y_chunk):
+        # Apply mask based on the chunk being processed
+        mask_chunk = (filtered_center_x >= x_chunk.min()) & (filtered_center_x <= x_chunk.max()) & \
+                     (filtered_center_y >= y_chunk.min()) & (filtered_center_y <= y_chunk.max())
 
-    else:
-        interpolated_var = griddata((filtered_center_x, filtered_center_y), filtered_var_data, (grid_x, grid_y), method=method)
+        # Apply chunk-based filtering to the data
+        filtered_center_x_chunk = filtered_center_x[mask_chunk]
+        filtered_center_y_chunk = filtered_center_y[mask_chunk]
+        filtered_var_data_chunk = filtered_var_data[mask_chunk]
 
+        # Interpolate the chunk
+        if method == 'linear':
+            interpolator = LinearNDInterpolator((filtered_center_x_chunk, filtered_center_y_chunk), filtered_var_data_chunk)
+            interpolated_var = interpolator(x_chunk, y_chunk)
+        else:
+            interpolated_var = griddata((filtered_center_x_chunk, filtered_center_y_chunk), filtered_var_data_chunk, 
+                                        (x_chunk, y_chunk), method=method)
+
+        return interpolated_var
+
+    # Split the grid into smaller chunks for parallel processing
+    n_chunks = cores  # Adjust this based on your CPU/core count
+    chunk_size = Ngrid_x // n_chunks
+
+    # Create a list of chunks to process
+    x_chunks = [grid_x[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
+    y_chunks = [grid_y[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
+
+    # Parallelize the interpolation process
+    interpolated_var_chunks = Parallel(n_jobs=cores)(
+        delayed(interpolate_chunk)(x_chunk, y_chunk) for x_chunk, y_chunk in zip(x_chunks, y_chunks)
+    )
+
+    # Combine the results from all chunks
+    interpolated_var = np.hstack(interpolated_var_chunks)
     # Fill NaNs if using linear interpolation
     if method == 'linear':
         interpolated_var = fill_nan(interpolated_var)
@@ -1850,3 +1945,137 @@ def interpolate_grid(data, var, Ngrid_x=2048, Ngrid_y=2048, method='nearest', x_
     print('===============================')
 
     return grid_x, grid_y, interpolated_var
+
+
+
+def interpolate_var_to_grid_3d(data, var, Ngrid_x=2048, Ngrid_y=2048, Ngrid_z=2048, method='nearest', x_range=None, y_range=None, z_range=None, cores=1):
+    """
+    Interpolates the specified variable from cell center data onto a uniform 2D grid.
+
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y', and the variable to interpolate.
+    - var (str): The key in the `data` dictionary corresponding to the variable to be interpolated.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+    - z_range (tuple, optional): A tuple (zmin, zmax) to limit the interpolation to the specified z bounds. If None, no limits are applied.
+    - cores (int): Number of cores to use in parallel when interpolating
+
+    Returns:
+    - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
+              and the interpolated variable on the uniform grid.
+    """
+    print('===============================')
+    print(f"Started interpolating")
+    start_time = time.time()
+
+    center_x, center_y, center_z = data["center_x"], data["center_y"], data["center_z"]
+
+    # Create initial mask for both x and y
+    mask = np.ones(center_x.shape, dtype=bool)
+
+    # Apply spatial filtering based on the provided x_range
+    if x_range is not None:
+        x_mask = (center_x >= x_range[0]) & (center_x <= x_range[1])
+        mask &= x_mask  # Combine with the overall mask
+
+    # Apply spatial filtering based on the provided y_range
+    if y_range is not None:
+        y_mask = (center_y >= y_range[0]) & (center_y <= y_range[1])
+        mask &= y_mask  # Combine with the overall mask
+        
+    # Apply spatial filtering based on the provided z_range
+    if z_range is not None:
+        z_mask = (center_z >= z_range[0]) & (center_z <= z_range[1])
+        mask &= z_mask  # Combine with the overall mask
+
+    # Filter the center_x, center_y, and variable data based on the combined mask
+    filtered_center_x = center_x[mask]
+    filtered_center_y = center_y[mask]
+    filtered_center_z = center_z[mask]
+    filtered_var_data = data[var][mask]  # Ensure var data is filtered according to the same mask
+
+    # Create a uniform grid based on the range of filtered x and y
+    grid_x, grid_y, grid_z = np.linspace(filtered_center_x.min(), filtered_center_x.max(), Ngrid_x), \
+                     np.linspace(filtered_center_y.min(), filtered_center_y.max(), Ngrid_y), \
+                     np.linspace(filtered_center_z.min(), filtered_center_z.max(), Ngrid_z)
+    grid_x, grid_y, grid_z = np.meshgrid(grid_x, grid_y, grid_z)
+
+    # Function to interpolate a chunk of the grid
+    def interpolate_chunk(x_chunk, y_chunk, z_chunk):
+        # Apply mask based on the chunk being processed
+        mask_chunk = (filtered_center_x >= x_chunk.min()) & (filtered_center_x <= x_chunk.max()) & \
+                     (filtered_center_y >= y_chunk.min()) & (filtered_center_y <= y_chunk.max()) & \
+                     (filtered_center_z >= z_chunk.min()) & (filtered_center_z <= z_chunk.max())
+
+        # Apply chunk-based filtering to the data
+        filtered_center_x_chunk = filtered_center_x[mask_chunk]
+        filtered_center_y_chunk = filtered_center_y[mask_chunk]
+        filtered_center_z_chunk = filtered_center_z[mask_chunk]
+        filtered_var_data_chunk = filtered_var_data[mask_chunk]
+
+        # Interpolate the chunk
+        if method == 'linear':
+            interpolator = LinearNDInterpolator((filtered_center_x_chunk, filtered_center_y_chunk, filtered_center_z_chunk), filtered_var_data_chunk)
+            interpolated_var = interpolator(x_chunk, y_chunk, z_chunk)
+        else:
+            interpolated_var = griddata((filtered_center_x_chunk, filtered_center_y_chunk, filtered_center_z_chunk), filtered_var_data_chunk, 
+                                        (x_chunk, y_chunk, z_chunk), method=method)
+
+        return interpolated_var
+
+    # Split the grid into smaller chunks for parallel processing
+    n_chunks = cores  # Adjust this based on your CPU/core count
+    chunk_size = Ngrid_x // n_chunks
+
+    # Create a list of chunks to process
+    x_chunks = [grid_x[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
+    y_chunks = [grid_y[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
+    z_chunks = [grid_z[:, i * chunk_size:(i + 1) * chunk_size] for i in range(n_chunks)]
+
+    # Parallelize the interpolation process
+    interpolated_var_chunks = Parallel(n_jobs=cores)(
+        delayed(interpolate_chunk)(x_chunk, y_chunk, z_chunk) for x_chunk, y_chunk, z_chunk in zip(x_chunks, y_chunks, z_chunks)
+    )
+
+    # Combine the results from all chunks
+    interpolated_var = np.hstack(interpolated_var_chunks)
+
+    # Fill NaNs if using linear interpolation
+    if method == 'linear':
+        interpolated_var = fill_nan_3d(interpolated_var)
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Finished interpolating")
+    print(f"Time taken to interpolate: {elapsed_time:.4f} seconds")
+    print('===============================')
+
+    return grid_x, grid_y, interpolated_var
+
+def fill_nan_3d(grid):
+    """
+    Fills NaN values in a 3D array using nearest neighbor interpolation.
+
+    Parameters:
+    - grid (ndarray): A 3D array with NaN values that need to be filled.
+
+    Returns:
+    - ndarray: The input array with NaN values filled.
+    """
+    nan_mask = np.isnan(grid)
+    if np.any(nan_mask):
+        # Find the indices of non-NaN values
+        x_non_nan, y_non_nan, z_non_nan = np.where(~nan_mask)
+        non_nan_values = grid[~nan_mask]
+        
+        # Fill NaN values with nearest neighbor interpolation
+        grid[nan_mask] = griddata(
+            (x_non_nan, y_non_nan, z_non_nan),
+            non_nan_values,
+            (np.where(nan_mask)[0], np.where(nan_mask)[1], np.where(nan_mask)[2]),
+            method='nearest'
+        )
+    return grid
