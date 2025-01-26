@@ -6,7 +6,7 @@ Date: October 2024
 Email: michael.grehan@mail.utoronto.ca
 
 ------------------------------------------------------------------------------------
-This module provides functionality for reading and processing BHAC VTU data files
+This module provides functionality for reading and processing 2D BHAC VTU data files
 that do not include GR effects. The module is designed to read 
 VTU files, extract relevant data fields, and return them in a format suitable for 
 numerical analysis and visualization.
@@ -185,7 +185,7 @@ from joblib import Parallel, delayed
 
 
 
-def fast_vtu_reader(filename, attr='all', blocks=False):
+def fast_vtu_reader(filename, attr='all', blocks=False, twod=True):
     """
     Reads a VTU file produced by BHAC for 2D simulations.
 
@@ -352,8 +352,10 @@ def fast_vtu_reader(filename, attr='all', blocks=False):
 
 
     data["ncells"] = total_cells
-    # data["center_x"], data["center_y"] = calculate_cell_centers(data)
-    data["center_x"], data["center_y"], data["center_z"] = calculate_cell_centers_3d(data)
+    if twod:
+        data["center_x"], data["center_y"] = calculate_cell_centers(data)
+    else:
+        data["center_x"], data["center_y"], data["center_z"] = calculate_cell_centers_3d(data)
 
     end_time = time.time()
     elapsed_time = end_time - start_time
