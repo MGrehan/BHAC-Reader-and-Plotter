@@ -353,8 +353,8 @@ def fast_vtu_reader(filename, attr='all', blocks=False):
     data["ncells"] = total_cells
     data["center_x"], data["center_y"] = calculate_cell_centers(data)
    
-    end_time = time.time()
-    elapsed_time = end_time - start_time
+    # end_time = time.time()
+    # elapsed_time = end_time - start_time
     print(f"Finished reading file: {filename}")
     # print(f"Time taken to read: {elapsed_time:.4f} seconds")
     print('===============================')
