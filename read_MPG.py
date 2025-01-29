@@ -2031,3 +2031,84 @@ def interpolate_var_to_grid_fast(data, var, Ngrid_x=2048, Ngrid_y=2048,
     # print(f"Completed in {time.time() - start_time:.2f} seconds")
     # print('===============================')
     return grid_x, grid_y, result
+
+
+
+def interpolate_var_to_grid_fast_3d(data, var, Ngrid_x=2048, Ngrid_y=2048, Ngrid_z=2048, 
+                                method='nearest', x_range=None, y_range=None, z_range=None,
+                                workers=-1):
+    """
+    Interpolates the specified variable from cell center data onto a uniform 3D grid.
+    Ultra-optimized interpolation using spatial hashing and parallel KDTree. Only
+    optimized for nearest method.
+    
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y', and the variable to interpolate.
+    - var (str): The key in the `data` dictionary corresponding to the variable to be interpolated.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - Ngrid_z (int): The number of grid points along the z-axis (default is 2048).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (zmin, zmax) to limit the interpolation to the specified z bounds. If None, no limits are applied.
+    - workers (int): Number of cores to use (default is -1, which uses all cores).
+    Returns:
+    - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
+              and the interpolated variable on the uniform grid.
+    """
+    
+    if method != 'nearest':
+        print("Only optimized for nearest method. Use normal interpolation function otherwise.")
+        return  
+
+    
+    # print('===============================')
+    # print(f"Starting accelerated interpolation")
+    # start_time = time.time()
+
+    # Extract and filter coordinates
+    center_x, center_y, center_z = calculate_cell_centers_3d(data)
+    var_data = data[var]
+    
+    # Create spatial mask
+    mask = np.ones_like(center_x, dtype=bool)
+    if x_range is not None:
+        mask &= (center_x >= x_range[0]) & (center_x <= x_range[1])
+    if y_range is not None:
+        mask &= (center_y >= y_range[0]) & (center_y <= y_range[1])
+    if z_range is not None:
+        mask &= (center_z >= z_range[0]) & (center_z <= z_range[1])
+    
+    filtered_x = center_x[mask]
+    filtered_y = center_y[mask]
+    filtered_z = center_z[mask]
+    filtered_var = var_data[mask]
+
+    # Handle empty data case
+    if filtered_x.size == 0:
+        raise ValueError("No data remaining after spatial filtering")
+
+    # Create grid using vectorized operations
+    x_min, x_max = (x_range if x_range else (filtered_x.min(), filtered_x.max()))
+    y_min, y_max = (y_range if y_range else (filtered_y.min(), filtered_y.max()))
+    z_min, z_max = (z_range if z_range else (filtered_z.min(), filtered_z.max()))
+    xi = np.linspace(x_min, x_max, Ngrid_x)
+    yi = np.linspace(y_min, y_max, Ngrid_y)
+    zi = np.linspace(z_min, z_max, Ngrid_z)
+    grid_x, grid_y, grid_z = np.meshgrid(xi, yi, zi)
+
+    # Core interpolation logic
+    if method == 'nearest':
+        # Build parallel KDTree with all cores
+        tree = cKDTree(np.column_stack([filtered_x, filtered_y, filtered_z]))
+        # Parallel query with all cores (workers=-1)
+        _, indices = tree.query(np.column_stack([grid_x.ravel(), grid_y.ravel(), grid_z.ravel()]), workers=workers)
+        result = filtered_var[indices].reshape(grid_x.shape)
+
+        
+
+
+    # print(f"Completed in {time.time() - start_time:.2f} seconds")
+    # print('===============================')
+    return grid_x, grid_y, grid_z, result
