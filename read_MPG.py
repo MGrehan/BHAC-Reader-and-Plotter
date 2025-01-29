@@ -1931,7 +1931,7 @@ def interpolate_var_to_grid_3d(data, var, Ngrid_x=2048, Ngrid_y=2048, Ngrid_z=20
     # print(f"Time taken to interpolate: {elapsed_time:.4f} seconds")
     # print('===============================')
 
-    return grid_x, grid_y, interpolated_var
+    return grid_x, grid_y, grid_z, interpolated_var
 
 def fill_nan_3d(grid):
     """
