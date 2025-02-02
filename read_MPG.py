@@ -149,7 +149,6 @@ ax.streamplot(grid_x, grid_y, interp_b1, interp_b3, color='w', linewidth=0.75,
 ax.set_title(f'$t/t_c = {t:.2f}$') 
 plt.show() 
 
-
 --------------
 Usage Example (plotting using fast plotting):
 --------------
@@ -168,7 +167,6 @@ ax.set_xlim(xmin, xmax)
 ax.set_ylim(ymin ,ymax)
 ax.set_title(f'$t/t_c = {t:.1f}$')
 plt.show() 
-
 
 
 
@@ -2201,7 +2199,7 @@ def plot_cell_centers_fast(data, field_data, fig=None, ax=None,
                               x_range=None, y_range=None, vmin=None, vmax=None,
                               cmap='viridis', label=None, orientation='vertical',
                               location='right', use_log_norm=False, pad=0.1, workers=-1, 
-                              scaling=1):
+                              scaling=1, colorbar=True):
     """
     Fastest possible plotting using direct pixel assignment.
     Bins data into pixels for maximum performance with huge datasets.
@@ -2311,10 +2309,12 @@ def plot_cell_centers_fast(data, field_data, fig=None, ax=None,
     if vmax == None:
         vmax = np.max(field_data)
     
-    # Create or get figure/axis
+    # Create figure and axis if not provided
     if fig is None or ax is None:
         fig, ax = plt.subplots()
         ax.set_aspect('equal')
+        ax.set_xlabel('$x/L$')
+        ax.set_ylabel('$y/L$')
     
     # Plot using imshow
     im = ax.imshow(grid,
@@ -2328,8 +2328,25 @@ def plot_cell_centers_fast(data, field_data, fig=None, ax=None,
                    interpolation_stage='data')
     
     # Add colorbar if label provided
-    if label is not None:
-        cb = fig.colorbar(im, ax=ax, label=label,
-                    orientation=orientation, location=location, pad=pad)
+        # Add colorbar with 'extend' parameter determined from the data
+    if colorbar:
+        # Determine extend based on comparisons
+        extend_type = 'neither'  # Default
+        if np.any(field_data < vmin):
+            extend_type = 'min'
+        if np.any(field_data > vmax):
+            extend_type = 'max'
+        if np.any(field_data < vmin) and np.any(field_data > vmax):
+            extend_type = 'both'
+        cbar = plt.colorbar(im, ax=ax, extend=extend_type, 
+                            label=label, orientation=orientation, location=location, 
+                            pad=pad)
+        
+    
+    # Set plot limits
+    ax.set_xlim(center_x.min(), center_x.max())
+    ax.set_ylim(center_y.min(), center_y.max())
+
+
     
     return im, fig, ax
