@@ -941,52 +941,43 @@ def plot_raw_data_cells(data, field_data, fig=None, ax=None, x_range=None, y_ran
     print("Started plotting raw data cells")
     # start_time = time.time()
 
+
+    # Extract data components
     x = data['xpoint']
     y = data['ypoint']
     ncells = data['ncells']
-    offsets = data['offsets']
     connectivity = data['connectivity']
+    offsets = data['offsets']
 
-    # Create mod_conn array using broadcasting
-    base_conn = connectivity[:np.max(offsets)]
-    num_iterations = int(4 * ncells / np.max(offsets))
-    offsets_array = np.arange(num_iterations) * (np.max(base_conn) + 1)
-    mod_conn = (base_conn + offsets_array[:, None]).ravel()[:ncells * 4]
-    cell_vertices = mod_conn.reshape(ncells, 4)
+    # Generate cell vertices using vectorized operations
+    max_offset = offsets.max()
+    base_conn = connectivity[:max_offset]
+    repeat_factor = int(4 * ncells / max_offset)
+    cell_vertices = (base_conn + (np.arange(repeat_factor) * (base_conn.max() + 1))[:, None]
+                    ).ravel()[:ncells*4].reshape(ncells, 4)
 
-    # Extract x and y coordinates for all cells at once
-    x_vals = x[cell_vertices]
-    y_vals = y[cell_vertices]
+    # Precompute bounds for fast filtering
+    x_temp = x[cell_vertices]
+    y_temp = y[cell_vertices]
+    x_min, x_max = x_temp[:, 0], x_temp[:, 1]
+    y_min_cell, y_max_cell = y_temp[:, 0], y_temp[:, 2]
 
-    # Apply spatial filtering based on the provided x_range and y_range
+    # Vectorized range filtering
+    mask = np.ones(ncells, dtype=bool)
     if x_range is not None:
-        x_mask = (x_vals.min(axis=1) >= x_range[0]) & (x_vals.max(axis=1) <= x_range[1])
-    else:
-        x_mask = np.ones(ncells, dtype=bool)
-
+        mask &= (x_min >= x_range[0]) & (x_max <= x_range[1])
     if y_range is not None:
-        y_mask = (y_vals.min(axis=1) >= y_range[0]) & (y_vals.max(axis=1) <= y_range[1])
-    else:
-        y_mask = np.ones(ncells, dtype=bool)
+        mask &= (y_min_cell >= y_range[0]) & (y_max_cell <= y_range[1])
 
-
-    # Combine masks to filter cells
-    valid_cells = x_mask & y_mask
-    x_vals = x_vals[valid_cells]
-    y_vals = y_vals[valid_cells]
-    filtered_field_data = field_data[valid_cells]
-    filtered_ncells = len(x_vals)
-
-    # Create polygons for PolyCollection (one polygon per cell)
-    polygons = []
-    for i in range(filtered_ncells):
-        polygon = [
-            (x_vals[i, 0], y_vals[i, 0]),
-            (x_vals[i, 1], y_vals[i, 0]),
-            (x_vals[i, 1], y_vals[i, 2]),
-            (x_vals[i, 0], y_vals[i, 2])
-        ]
-        polygons.append(polygon)
+    # Apply masks early to reduce memory usage
+    filtered_cells = cell_vertices[mask]
+    filtered_field_data = field_data[mask]
+    filtered_ncells = filtered_cells.shape[0]
+    
+    # Directly create polygon coordinates from filtered data
+    x_poly = x[filtered_cells][:, [0, 1, 1, 0]]  # x0, x1, x1, x0
+    y_poly = y[filtered_cells][:, [0, 0, 2, 2]]  # y0, y0, y2, y2
+    polygons = np.dstack((x_poly, y_poly))
 
     # Create figure and axis if not provided
     if fig is None or ax is None:
@@ -1033,10 +1024,8 @@ def plot_raw_data_cells(data, field_data, fig=None, ax=None, x_range=None, y_ran
                             pad=pad)
 
     # Set plot limits
-    # ax.set_xlim(x_range if x_range is not None else (x.min(), x.max()))
-    # ax.set_ylim(y_range if y_range is not None else (y.min(), y.max()))
-    ax.set_xlim(x_vals.min(), x_vals.max())
-    ax.set_ylim(y_vals.min(), y_vals.max())
+    ax.set_xlim(x_poly.min(), x_poly.max())
+    ax.set_ylim(y_poly.min(), y_poly.max())
 
 
     # end_time = time.time()
@@ -2112,3 +2101,215 @@ def interpolate_var_to_grid_fast_3d(data, var, Ngrid_x=2048, Ngrid_y=2048, Ngrid
     # print(f"Completed in {time.time() - start_time:.2f} seconds")
     # print('===============================')
     return grid_x, grid_y, grid_z, result
+
+
+
+
+
+def interpolate_to_grid_fast(data, var_data, Ngrid_x=2048, Ngrid_y=2048, 
+                                method='nearest', x_range=None, y_range=None,
+                                workers=-1):
+    """
+    Interpolates the specified variable from cell center data onto a uniform 2D grid.
+    Ultra-optimized interpolation using spatial hashing and parallel KDTree. Only
+    optimized for nearest method.
+    
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y'.
+    - var (numpy array): The data to interpolate.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit the interpolation to the specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit the interpolation to the specified y bounds. If None, no limits are applied.
+    - workers (int): Number of cores to use (default is -1, which uses all cores).
+    Returns:
+    - tuple: A tuple containing the grid points in the x-direction, grid points in the y-direction,
+              and the interpolated variable on the uniform grid.
+    """
+    
+    if method != 'nearest':
+        print("Only optimized for nearest method. Use normal interpolation function otherwise.")
+        return  
+
+    
+    # print('===============================')
+    # print(f"Starting accelerated interpolation")
+    # start_time = time.time()
+
+    # Extract and filter coordinates
+    center_x, center_y = data["center_x"], data["center_y"]
+    
+    # Create spatial mask
+    mask = np.ones_like(center_x, dtype=bool)
+    if x_range is not None:
+        mask &= (center_x >= x_range[0]) & (center_x <= x_range[1])
+    if y_range is not None:
+        mask &= (center_y >= y_range[0]) & (center_y <= y_range[1])
+    
+    filtered_x = center_x[mask]
+    filtered_y = center_y[mask]
+    filtered_var = var_data[mask]
+
+    # Handle empty data case
+    if filtered_x.size == 0:
+        raise ValueError("No data remaining after spatial filtering")
+
+    # Create grid using vectorized operations
+    x_min, x_max = (x_range if x_range else (filtered_x.min(), filtered_x.max()))
+    y_min, y_max = (y_range if y_range else (filtered_y.min(), filtered_y.max()))
+    xi = np.linspace(x_min, x_max, Ngrid_x)
+    yi = np.linspace(y_min, y_max, Ngrid_y)
+    grid_x, grid_y = np.meshgrid(xi, yi)
+
+    # Core interpolation logic
+    if method == 'nearest':
+        # Build parallel KDTree with all cores
+        tree = cKDTree(np.column_stack([filtered_x, filtered_y]))
+        # Parallel query with all cores (workers=-1)
+        _, indices = tree.query(np.column_stack([grid_x.ravel(), grid_y.ravel()]), workers=workers)
+        result = filtered_var[indices].reshape(grid_x.shape)
+
+        
+
+
+    # print(f"Completed in {time.time() - start_time:.2f} seconds")
+    # print('===============================')
+    return grid_x, grid_y, result
+
+def plot_cell_centers_fast(data, field_data, fig=None, ax=None,
+                              x_range=None, y_range=None, vmin=None, vmax=None,
+                              cmap='viridis', label=None, orientation='vertical',
+                              location='right', use_log_norm=False, pad=0.1, workers=-1, 
+                              scaling=1):
+    """
+    Fastest possible plotting using direct pixel assignment.
+    Bins data into pixels for maximum performance with huge datasets.
+    Interpolates to highest resolution of grid, can be adjusted by
+    scaling. Use parallel interpolation by default. 
+
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y'.
+    - field_data (ndarray): 1D array of field values corresponding to each cell. These values determine the color of each cell.
+    - fig (matplotlib.figure.Figure, optional): A Matplotlib figure object. If not provided, a new figure is created.
+    - ax (matplotlib.axes.Axes, optional): A Matplotlib axis object. If not provided, a new axis is created.
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit plotted cells within specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit plotted cells within specified y bounds. If None, no limits are applied.
+    - vmin (float, optional): Minimum value for color mapping. If None, the minimum value from filtered_field_data is used.
+    - vmax (float, optional): Maximum value for color mapping. If None, the maximum value from filtered_field_data is used.
+    - cmap (str, optional): Colormap used to color the cells. Default is 'viridis'.
+    - label (str, optional): Label for the colorbar.
+    - orientation (str, optional): Orientation of the colorbar. Default is 'vertical'.
+    - location (str, optional): Location of the colorbar. Default is 'right'.
+    - use_log_norm (bool, optional): If True, applies logarithmic normalization to the field data for color mapping. Default is False.
+    - pad: The colorbar padding. Default is 0.1.
+    - workers (int): Number of cores to use (default is -1, which uses all cores).
+    - scaling (int): Resolution to interpolate to compared to max reoslution, (e.g. scaling = 2 will plot at half the max resolution).
+
+    Returns:
+    - im
+    - fig (matplotlib.figure.Figure): The figure object containing the plot.
+    - ax (matplotlib.axes.Axes): The axis object with the plotted data.
+    """
+    center_x, center_y = data["center_x"], data["center_y"]
+
+    # Create initial mask for both x and y
+    mask = np.ones(center_x.shape, dtype=bool)
+
+    # Apply spatial filtering based on the provided x_range
+    if x_range is not None:
+        x_mask = (center_x >= x_range[0]) & (center_x <= x_range[1])
+        mask &= x_mask  # Combine with the overall mask
+
+    # Apply spatial filtering based on the provided y_range
+    if y_range is not None:
+        y_mask = (center_y >= y_range[0]) & (center_y <= y_range[1])
+        mask &= y_mask  # Combine with the overall mask
+
+    # Filter the center_x, center_y, and variable data based on the combined mask
+    x = center_x[mask]
+    y = center_y[mask]
+    
+    
+    diffx = np.abs(np.diff(x))
+    diffx = np.min(diffx[diffx != 0])
+    diffy = np.abs(np.diff(y))
+    diffy = np.min(diffy[diffy != 0])
+
+    ncellsx = np.abs(x.max() - x.min() )/diffx
+    ncellsy = np.abs(y.max() - y.min() )/diffy
+    
+    resolution_x = int(round(ncellsx/2)*2)//scaling
+    resolution_y = int(round(ncellsy/2)*2)//scaling
+
+            
+    
+    # Determine plot ranges
+    x_min = x_range[0] if x_range is not None else center_x.min()
+    x_max = x_range[1] if x_range is not None else center_x.max()
+    y_min = y_range[0] if y_range is not None else center_y.min()
+    y_max = y_range[1] if y_range is not None else center_y.max()
+    
+    # Calculate aspect ratio and grid dimensions
+    nx = resolution_x
+    ny = resolution_y
+    
+    
+    center_x, center_y, field_data = interpolate_to_grid_fast(data, field_data, Ngrid_x=nx, Ngrid_y=ny, 
+                                method='nearest', x_range=x_range, y_range=y_range,
+                                workers=workers)
+    
+    # center_x = x#.flatten()
+    # center_y = y#.flatten()
+    # field_data = field_data#.flatten()
+    
+    
+    # Create 2D histogram with data values
+    x_bins = np.linspace(x_min, x_max, nx + 1)
+    y_bins = np.linspace(y_min, y_max, ny + 1)
+    
+    # Digitize points to bin indices
+    x_indices = np.digitize(center_x, x_bins) - 1
+    y_indices = np.digitize(center_y, y_bins) - 1
+    
+    # Create grid and accumulate values
+    grid = np.zeros((ny, nx))
+    count = np.zeros((ny, nx))
+    
+    # Use bincount2d-like approach for speed
+    valid = (x_indices >= 0) & (x_indices < nx) & (y_indices >= 0) & (y_indices < ny)
+    np.add.at(grid, (y_indices[valid], x_indices[valid]), field_data[valid])
+    np.add.at(count, (y_indices[valid], x_indices[valid]), 1)
+    
+    # Average values in each cell (avoiding division by zero)
+    mask = count > 0
+    grid[mask] /= count[mask]
+    
+    if vmin == None:
+        vmin = np.min(field_data)
+        
+    if vmax == None:
+        vmax = np.max(field_data)
+    
+    # Create or get figure/axis
+    if fig is None or ax is None:
+        fig, ax = plt.subplots()
+        ax.set_aspect('equal')
+    
+    # Plot using imshow
+    im = ax.imshow(grid,
+                   origin='lower',
+                   extent=[x_min, x_max, y_min, y_max],
+                   vmin=vmin,
+                   vmax=vmax,
+                   cmap=cmap,
+                   norm='log' if use_log_norm else None,
+                   interpolation='none',
+                   interpolation_stage='data')
+    
+    # Add colorbar if label provided
+    if label is not None:
+        cb = fig.colorbar(im, ax=ax, label=label,
+                    orientation=orientation, location=location, pad=pad)
+    
+    return im, fig, ax
