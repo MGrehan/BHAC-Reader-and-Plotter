@@ -154,8 +154,30 @@ plot_interpolated_2d_slice(data,
 ax.streamplot(grid_x, grid_y, interp_b1, interp_b3, color='w', linewidth=0.75, 
                 broken_streamlines=False, density=0.35)  
 ax.set_title(f'$t/t_c = {t:.2f}$') 
-plt.show() 
+plt.show()
 ```
+
+--------------
+Usage Example (plotting using fast plotting):
+--------------
+```
+fig, ax = plt.subplots()
+xmin, xmax = -0.5, 0.5
+ymin, ymax = -0.5, 0.5
+
+plot_cell_centers_fast(data, data['rho'], fig=fig, ax=ax, 
+                       x_range=(xmin,xmax), y_range=(ymin,ymax), cmap='cmr.iceburn', 
+                       label='$\\rho$', orientation='vertical',  location='right', 
+                       use_log_norm=False, pad=0.0, workers=-1, scaling=1)
+# plot_blocks(data, fig=fig, ax=ax, color='w')
+ax.set_xlabel('$x/L$')
+ax.set_ylabel('$y/L$')
+ax.set_xlim(xmin, xmax)
+ax.set_ylim(ymin ,ymax)
+ax.set_title(f'$t/t_c = {t:.1f}$')
+plt.show()
+```
+
 --------------
 Libraries Used:
 --------------
