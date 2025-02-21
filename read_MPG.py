@@ -2350,3 +2350,146 @@ def plot_cell_centers_fast(data, field_data, fig=None, ax=None,
 
     
     return im, fig, ax
+
+
+
+def plot_cyl_data_cells_continuous(data, field_data, fig=None, ax=None, x_range=None,
+                                     y_range=None, vmin=None, vmax=None, cmap='viridis', label=None, 
+                                     orientation='vertical', location='right', use_log_norm=False, 
+                                     pad=0.1, colorbar=True, resolution=512):
+    """
+    Plots cyl simulation data on a Cartesian grid as a continuous field.
+    Interpolates only over the specified x and y ranges.
+
+    Parameters:
+    - data (dict): A dictionary containing the following keys:
+        - 'xpoint' (ndarray): 1D array of x-coordinates for cell vertices.
+        - 'ypoint' (ndarray): 1D array of y-coordinates for cell vertices.
+        - 'ncells' (int): The total number of cells to be plotted.
+        - 'offsets' (ndarray): 1D array specifying the starting index of each cell's vertices in the connectivity array.
+        - 'connectivity' (ndarray): 1D array that defines the connections between cell vertices.
+        - 'theta_min' (float): Minimum theta value (in radians) for the data.
+        - 'theta_max' (float): Maximum theta value (in radians) for the data.
+    - field_data (ndarray): 1D array of field values corresponding to each cell. These values determine the color of each cell.
+    - fig (matplotlib.figure.Figure, optional): A Matplotlib figure object. If not provided, a new figure is created.
+    - ax (matplotlib.axes.Axes, optional): A Matplotlib axis object. If not provided, a new axis is created.
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit plotted cells within specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit plotted cells within specified y bounds. If None, no limits are applied.
+    - vmin (float, optional): Minimum value for color mapping. If None, the minimum value from filtered_field_data is used.
+    - vmax (float, optional): Maximum value for color mapping. If None, the maximum value from filtered_field_data is used.
+    - cmap (str, optional): Colormap used to color the cells. Default is 'viridis'.
+    - label (str, optional): Label for the colorbar.
+    - orientation (str, optional): Orientation of the colorbar. Default is 'vertical'.
+    - location (str, optional): Location of the colorbar. Default is 'right'.
+    - use_log_norm (bool, optional): If True, applies logarithmic normalization to the field data for color mapping. Default is False.
+    - pad: The colorbar padding. Default is 0.1.
+
+    Returns:
+    - im: The image object from pcolormesh.
+    - fig, ax: Matplotlib figure and axis objects.
+    """
+    print('===============================')
+    print("Started plotting continuous polar data")
+
+    # Extract data
+    center_x = data['center_x']
+    center_y = data['center_y']
+
+        
+    radii = np.sqrt(center_x**2 + center_y**2)
+    rmin = np.min(radii)
+    rmax = np.max(radii)
+    
+    # Theta mask
+    thetas = np.arctan2(center_x, center_y) 
+    theta_min = thetas.min()
+    theta_max = thetas.max()
+    theta_mask = (thetas >= theta_min) & (thetas <= theta_max)
+
+    
+    # Create masks for x_range, y_range, rmin, and theta
+    if x_range is not None:
+        x_min, x_max = x_range
+        x_mask = (center_x >= x_min) & (center_x <= x_max)
+    else:
+        x_min, x_max = center_x.min(), center_x.max()
+        x_mask = np.ones_like(center_x, dtype=bool)
+
+    if y_range is not None:
+        y_min, y_max = y_range
+        y_mask = (center_y >= y_min) & (center_y <= y_max)
+    else:
+        y_min, y_max = center_y.min(), center_y.max()
+        y_mask = np.ones_like(center_x, dtype=bool)
+        
+    r_mask = radii >= rmin
+
+    # Combine all masks
+    mask = x_mask & y_mask & r_mask & theta_mask
+
+    # Filter data points
+    filtered_x = center_x[mask]
+    filtered_y = center_y[mask]
+    filtered_field_data = field_data[mask]
+    
+    xi = np.linspace(x_min, x_max, resolution)
+    yi = np.linspace(y_min, y_max, resolution)
+    XI, YI = np.meshgrid(xi, yi)
+
+    # Interpolate the data onto the grid
+    points = np.column_stack((filtered_x, filtered_y))
+    grid_z = griddata(points, filtered_field_data, (XI, YI), method='nearest')
+
+    # Create a mask for the radial bounds
+    mask1 = XI**2 + YI**2 <= rmax**2
+    mask2 = XI**2 + YI**2 > rmin**2
+    radial_mask = mask1 & mask2
+
+    # Apply theta mask on grid
+    grid_thetas = np.arctan2(XI, YI)
+    theta_grid_mask = (grid_thetas >= theta_min) & (grid_thetas <= theta_max)
+
+    # Combine masks
+    final_mask = radial_mask & theta_grid_mask
+    grid_z = np.ma.masked_where(~final_mask, grid_z)
+
+    # Create figure and axis if not provided
+    if fig is None or ax is None:
+        fig, ax = plt.subplots()
+    ax.set_xlabel('$x/R_{\\rm{NS}}$')
+    ax.set_ylabel('$y/R_{\\rm{NS}}$')
+    ax.set_aspect('equal')
+
+    # Set vmin and vmax if not provided
+    if vmin is None:
+        vmin = np.nanmin(grid_z)
+    if vmax is None:
+        vmax = np.nanmax(grid_z)
+
+    # Apply log normalization if requested
+    norm = LogNorm(vmin=vmin, vmax=vmax) if use_log_norm else None
+
+    # Plot the interpolated data
+    im = ax.pcolormesh(XI, YI, grid_z, cmap=cmap, vmin=vmin, vmax=vmax, norm=norm)
+
+    # Add colorbar
+    if colorbar:
+        extend_type = 'neither'
+        if np.any(grid_z < vmin):
+            extend_type = 'min'
+        if np.any(grid_z > vmax):
+            extend_type = 'max'
+        if np.any(grid_z < vmin) and np.any(grid_z > vmax):
+            extend_type = 'both'
+        
+        cbar = plt.colorbar(im, ax=ax, extend=extend_type, label=label, 
+                            orientation=orientation, location=location, pad=pad)
+
+    # Set plot limits
+    ax.set_xlim(  ( np.min([0,x_min]) , np.max([0,x_max]) )  )
+    ax.set_ylim(  ( np.min([0,y_min]) , np.max([0,y_max]) )  )
+
+    print("Finished plotting continuous cyl data")
+    print('===============================')
+
+    return im, fig, ax
