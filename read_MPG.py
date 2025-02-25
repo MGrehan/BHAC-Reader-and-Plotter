@@ -1204,7 +1204,7 @@ def plot_polar_data_cells_continuous(data, field_data, fig=None, ax=None, x_rang
     if fig is None or ax is None:
         fig, ax = plt.subplots()
     ax.set_xlabel('$x/R_{\\rm{NS}}$')
-    ax.set_ylabel('$y/R_{\\rm{NS}}$')
+    ax.set_ylabel('$z/R_{\\rm{NS}}$')
     ax.set_aspect('equal')
 
     # Set vmin and vmax if not provided
@@ -2389,7 +2389,7 @@ def plot_cyl_data_cells_continuous(data, field_data, fig=None, ax=None, x_range=
     - fig, ax: Matplotlib figure and axis objects.
     """
     print('===============================')
-    print("Started plotting continuous polar data")
+    print("Started plotting continuous cyl data")
 
     # Extract data
     center_x = data['center_x']
@@ -2457,7 +2457,7 @@ def plot_cyl_data_cells_continuous(data, field_data, fig=None, ax=None, x_range=
     if fig is None or ax is None:
         fig, ax = plt.subplots()
     ax.set_xlabel('$x/R_{\\rm{NS}}$')
-    ax.set_ylabel('$y/R_{\\rm{NS}}$')
+    ax.set_ylabel('$z/R_{\\rm{NS}}$')
     ax.set_aspect('equal')
 
     # Set vmin and vmax if not provided
