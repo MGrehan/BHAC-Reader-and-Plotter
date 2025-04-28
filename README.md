@@ -178,6 +178,69 @@ ax.set_title(f'$t/t_c = {t:.1f}$')
 plt.show()
 ```
 
+
+--------------
+Usage Example (polar plotting with flux function):
+--------------
+```
+vmin, vmax = -0.5, 0.5
+xmin, xmax = 0.1, 5.0 
+ymin, ymax = -2.5, 2.5 
+figsize=(11,8)
+fig, ax = plt.subplots(figsize=figsize)
+grid_x, grid_z, Psi = smooth_flux_fcn(data, Ngrid_x = 4096, Ngrid_y = 4096, sigma=5, method='nearest',  x_range=(xmin,xmax), y_range=(ymin,ymax))
+contour = ax.contour(grid_x, grid_z, Psi, levels=35, colors='w', linewidths=1.0, linestyles='-')
+        
+p1, _, _ = plot_polar_data_cells_continuous(data, 
+                            (r**(3/2)) * bphi, 
+                            fig=fig, ax=ax, label='$(r/R_{\\rm{NS}})^3 B^{\\theta}/B_\\star$', 
+                            x_range=(xmin,xmax), y_range=(ymin, ymax), 
+                            resolution = 4096,
+                            colorbar=None, cmap=cmr.iceburn,
+                            vmin = vmin, vmax = vmax)
+
+
+cbar = fig.colorbar(p1, ax=ax, pad=0.01,  
+                    extend=determine_extend_from_plot(p1), label='$(r/R_{\\rm{NS}})^{3/2} B^{\\phi}/B_\\star$')
+ax.tick_params(axis='both', which='both', length=0)
+
+rescale_axis_labels(ax, xscale=1/RLC, yscale=1/RLC)
+ax.set_xlabel('$x/R_{\\rm{LC}}$')
+ax.set_ylabel('$z/R_{\\rm{LC}}$')
+ax.set_title(f'$t/P = {t*Omega/(2*np.pi):.3f}$')  
+```
+
+--------------
+Usage Example (polar plotting with flux function and parallelized functions):
+--------------
+
+```
+vmin, vmax = -0.25, 0.25
+xmin, xmax = 0.1, 5.0 
+ymin, ymax = -2.5, 2.5 
+figsize=(11,8)
+
+fig, ax = plt.subplots(figsize=figsize)
+
+grid_x, grid_z, Psi = smooth_flux_fcn_fast(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest',  x_range=(xmin,xmax), y_range=(ymin,ymax), workers=-1)
+contour = ax.contour(grid_x, grid_z, Psi, levels=35, colors='w', linewidths=1.0, linestyles='-')
+
+p1, _, _ = plot_polar_cell_centers_fast(data, (r**(3/2)) * bphi, fig=fig, ax=ax,
+                              x_range=(xmin,xmax), y_range=(ymin,ymax), vmin=vmin, vmax=vmax,
+                              cmap=cmr.iceburn, label=None, orientation='vertical',
+                              location='right', use_log_norm=False, pad=0.1, workers=-1, 
+                              resolution = 2048, colorbar=False)
+
+cbar = fig.colorbar(p1, ax=ax, pad=0.01,  
+                    extend=determine_extend_from_plot(p1), label='$(r/R_{\\rm{NS}})^{3/2} B^{\\phi}/B_\\star$')
+ax.tick_params(axis='both', which='both', length=0)
+
+rescale_axis_labels(ax, xscale=1/RLC, yscale=1/RLC)
+ax.set_xlabel('$x/R_{\\rm{LC}}$')
+ax.set_ylabel('$z/R_{\\rm{LC}}$')
+ax.set_title(f'$t/P = {t*Omega/(2*np.pi):.3f}$')  
+```
+
 --------------
 Libraries Used:
 --------------
