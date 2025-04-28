@@ -168,6 +168,67 @@ ax.set_ylim(ymin ,ymax)
 ax.set_title(f'$t/t_c = {t:.1f}$')
 plt.show() 
 
+--------------
+Usage Example (polar plotting with flux function):
+--------------
+vmin, vmax = -0.5, 0.5
+xmin, xmax = 0.1, 5.0 
+ymin, ymax = -2.5, 2.5 
+figsize=(11,8)
+fig, ax = plt.subplots(figsize=figsize)
+grid_x, grid_z, Psi = smooth_flux_fcn(data, Ngrid_x = 4096, Ngrid_y = 4096, sigma=5, method='nearest',  x_range=(xmin,xmax), y_range=(ymin,ymax))
+contour = ax.contour(grid_x, grid_z, Psi, levels=35, colors='w', linewidths=1.0, linestyles='-')
+        
+p1, _, _ = plot_polar_data_cells_continuous(data, 
+                            (r**(3/2)) * bphi, 
+                            fig=fig, ax=ax, label='$(r/R_{\\rm{NS}})^3 B^{\\theta}/B_\\star$', 
+                            x_range=(xmin,xmax), y_range=(ymin, ymax), 
+                            resolution = 4096,
+                            colorbar=None, cmap=cmr.iceburn,
+                            vmin = vmin, vmax = vmax)
+
+
+cbar = fig.colorbar(p1, ax=ax, pad=0.01,  
+                    extend=determine_extend_from_plot(p1), label='$(r/R_{\\rm{NS}})^{3/2} B^{\\phi}/B_\\star$')
+ax.tick_params(axis='both', which='both', length=0)
+
+rescale_axis_labels(ax, xscale=1/RLC, yscale=1/RLC)
+ax.set_xlabel('$x/R_{\\rm{LC}}$')
+ax.set_ylabel('$z/R_{\\rm{LC}}$')
+ax.set_title(f'$t/P = {t*Omega/(2*np.pi):.3f}$')  
+
+plt.show()
+
+--------------
+Usage Example (polar plotting with flux function and parallelized functions):
+--------------
+
+
+vmin, vmax = -0.25, 0.25
+xmin, xmax = 0.1, 5.0 
+ymin, ymax = -2.5, 2.5 
+figsize=(11,8)
+
+fig, ax = plt.subplots(figsize=figsize)
+
+grid_x, grid_z, Psi = smooth_flux_fcn_fast(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest',  x_range=(xmin,xmax), y_range=(ymin,ymax), workers=-1)
+contour = ax.contour(grid_x, grid_z, Psi, levels=35, colors='w', linewidths=1.0, linestyles='-')
+
+p1, _, _ = plot_polar_cell_centers_fast(data, (r**(3/2)) * bphi, fig=fig, ax=ax,
+                              x_range=(xmin,xmax), y_range=(ymin,ymax), vmin=vmin, vmax=vmax,
+                              cmap=cmr.iceburn, label=None, orientation='vertical',
+                              location='right', use_log_norm=False, pad=0.1, workers=-1, 
+                              resolution = 2048, colorbar=False)
+
+cbar = fig.colorbar(p1, ax=ax, pad=0.01,  
+                    extend=determine_extend_from_plot(p1), label='$(r/R_{\\rm{NS}})^{3/2} B^{\\phi}/B_\\star$')
+ax.tick_params(axis='both', which='both', length=0)
+
+rescale_axis_labels(ax, xscale=1/RLC, yscale=1/RLC)
+ax.set_xlabel('$x/R_{\\rm{LC}}$')
+ax.set_ylabel('$z/R_{\\rm{LC}}$')
+ax.set_title(f'$t/P = {t*Omega/(2*np.pi):.3f}$')  
+
 
 
 --------------
@@ -197,6 +258,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.collections import LineCollection
 from matplotlib.collections import PolyCollection
+from matplotlib.ticker import FuncFormatter
 from scipy.spatial import cKDTree
 
 
@@ -2299,9 +2361,11 @@ def plot_cell_centers_fast(data, field_data, fig=None, ax=None,
     np.add.at(grid, (y_indices[valid], x_indices[valid]), field_data[valid])
     np.add.at(count, (y_indices[valid], x_indices[valid]), 1)
     
-    # Average values in each cell (avoiding division by zero)
-    mask = count > 0
-    grid[mask] /= count[mask]
+    # # Average values in each cell (avoiding division by zero)
+    # mask = count > 0
+    # grid[mask] /= count[mask]
+    
+    grid = np.ma.masked_where(count == 0, grid)
     
     if vmin == None:
         vmin = np.min(field_data)
@@ -2493,3 +2557,288 @@ def plot_cyl_data_cells_continuous(data, field_data, fig=None, ax=None, x_range=
     print('===============================')
 
     return im, fig, ax
+
+
+
+def rescale_axis_labels(ax, xscale=1.0, yscale=1.0, xunit='', yunit=''):
+    """
+    Handy function for relabeling axes labels.
+    """
+    if xscale != 1.0:
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x * xscale:g}{xunit}"))
+    if yscale != 1.0:
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y * yscale:g}{yunit}"))
+
+
+def smooth_flux_fcn(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest',  x_range=None, y_range=None):
+    """
+    Interpolates the magnetic fields Bx and Bz, integrates them to obtain the flux function Psi, 
+    and applies Gaussian smoothing to the result.
+
+    Parameters:
+    - data (dict): A dictionary containing the magnetic field data with keys 'b1' and 'b2'.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - sigma (float): The standard deviation for Gaussian smoothing (default is 5).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+
+    Returns:
+    - ndarray: The smoothed flux function Psi.
+    """
+
+    grid_x, grid_z, interp_bx = interpolate_var_to_grid(data, "b1", Ngrid_x=Ngrid_x, 
+                                            Ngrid_y=Ngrid_y, x_range=x_range, 
+                                            y_range=y_range, method=method)
+
+    grid_x, grid_z, interp_bz = interpolate_var_to_grid(data, "b2", Ngrid_x=Ngrid_x, 
+                                                    Ngrid_y=Ngrid_y, x_range=x_range, 
+                                                    y_range=y_range, method=method)
+    
+    
+    nz, nx = interp_bx.shape
+
+    # Extract radial coordinate R (bottom row)
+    R = grid_x[0, :]
+
+    # Compute uniform grid spacings
+    dR = R[1] - R[0]
+    dz = grid_z[1, 0] - grid_z[0, 0]
+
+    # 1) Baseline R*A_phi at z0: integrate R'*Bz dR
+    RA0 = np.zeros(nx)
+    RA0[1:] = np.cumsum(R[:-1] * interp_bz[0, :-1] * dR)
+
+    # 2) Cumulative z-integration of R*Br
+    #    integral from z0 to z: \int R * Br dz
+    R_factor = np.broadcast_to(R, (nz, nx))
+    integrand = R_factor * interp_bx
+    cum_RBr = np.vstack((
+        np.zeros((1, nx)),
+        np.cumsum(integrand[:-1, :] * dz, axis=0)
+    ))
+
+    # 3) Full R*A_phi on grid
+    RA = RA0[None, :] - cum_RBr
+
+    # 4) Compute A_phi = RA / R (mask axis R=0)
+    A_phi = np.zeros_like(RA)
+    mask = grid_x > 0
+    A_phi[mask] = RA[mask] / grid_x[mask]
+
+    # 5) Flux Psi = R * A_phi (equals RA)
+    Psi = RA
+    Psi = gaussian_filter(Psi, sigma=sigma) # smooth out noise
+    
+    
+    return grid_x, grid_z, Psi
+
+def smooth_flux_fcn_fast(data, Ngrid_x = 2048, Ngrid_y = 2048, sigma=5, method='nearest',  x_range=None, y_range=None, workers=-1):
+    """
+    Interpolates the magnetic fields Bx and Bz, integrates them to obtain the flux function Psi, 
+    and applies Gaussian smoothing to the result.
+
+    Parameters:
+    - data (dict): A dictionary containing the magnetic field data with keys 'b1' and 'b2'.
+    - Ngrid_x (int): The number of grid points along the x-axis (default is 2048).
+    - Ngrid_y (int): The number of grid points along the y-axis (default is 2048).
+    - sigma (float): The standard deviation for Gaussian smoothing (default is 5).
+    - method (str): The interpolation method to use ('nearest', 'linear', or 'cubic'; default is 'nearest').
+
+    Returns:
+    - ndarray: The smoothed flux function Psi.
+    """
+
+    grid_x, grid_z, interp_bx = interpolate_to_grid_fast(data, data['b1'], Ngrid_x=Ngrid_x, 
+                                            Ngrid_y=Ngrid_y, x_range=x_range, 
+                                            y_range=y_range, workers=workers, method=method)
+
+    grid_x, grid_z, interp_bz = interpolate_to_grid_fast(data, data['b2'], Ngrid_x=Ngrid_x, 
+                                                    Ngrid_y=Ngrid_y, x_range=x_range, 
+                                                    y_range=y_range, workers=workers, method=method)
+    
+    
+    nz, nx = interp_bx.shape
+
+    # Extract radial coordinate R (bottom row)
+    R = grid_x[0, :]
+
+    # Compute uniform grid spacings
+    dR = R[1] - R[0]
+    dz = grid_z[1, 0] - grid_z[0, 0]
+
+    # 1) Baseline R*A_phi at z0: integrate R'*Bz dR
+    RA0 = np.zeros(nx)
+    RA0[1:] = np.cumsum(R[:-1] * interp_bz[0, :-1] * dR)
+
+    # 2) Cumulative z-integration of R*Br
+    #    integral from z0 to z: \int R * Br dz
+    R_factor = np.broadcast_to(R, (nz, nx))
+    integrand = R_factor * interp_bx
+    cum_RBr = np.vstack((
+        np.zeros((1, nx)),
+        np.cumsum(integrand[:-1, :] * dz, axis=0)
+    ))
+
+    # 3) Full R*A_phi on grid
+    RA = RA0[None, :] - cum_RBr
+
+    # 4) Compute A_phi = RA / R (mask axis R=0)
+    A_phi = np.zeros_like(RA)
+    mask = grid_x > 0
+    A_phi[mask] = RA[mask] / grid_x[mask]
+
+    # 5) Flux Psi = R * A_phi (equals RA)
+    Psi = RA
+    Psi = gaussian_filter(Psi, sigma=sigma) # smooth out noise
+    
+    
+    return grid_x, grid_z, Psi
+
+
+
+def plot_polar_cell_centers_fast(data, field_data, fig=None, ax=None,
+                              x_range=None, y_range=None, vmin=None, vmax=None,
+                              cmap='viridis', label=None, orientation='vertical',
+                              location='right', use_log_norm=False, pad=0.1, workers=-1, 
+                              resolution=2048, colorbar=True):
+    """
+    Fastest possible plotting using direct pixel assignment.
+    Bins data into pixels for maximum performance with huge datasets.
+    Interpolates to highest resolution of grid, can be adjusted by
+    scaling. Use parallel interpolation by default. 
+    For sphereical 2D data in (x,z) plane.
+
+    Parameters:
+    - data (dict): A dictionary containing the data, including 'center_x', 'center_y'.
+    - field_data (ndarray): 1D array of field values corresponding to each cell. These values determine the color of each cell.
+    - fig (matplotlib.figure.Figure, optional): A Matplotlib figure object. If not provided, a new figure is created.
+    - ax (matplotlib.axes.Axes, optional): A Matplotlib axis object. If not provided, a new axis is created.
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit plotted cells within specified x bounds. If None, no limits are applied.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit plotted cells within specified y bounds. If None, no limits are applied.
+    - vmin (float, optional): Minimum value for color mapping. If None, the minimum value from filtered_field_data is used.
+    - vmax (float, optional): Maximum value for color mapping. If None, the maximum value from filtered_field_data is used.
+    - cmap (str, optional): Colormap used to color the cells. Default is 'viridis'.
+    - label (str, optional): Label for the colorbar.
+    - orientation (str, optional): Orientation of the colorbar. Default is 'vertical'.
+    - location (str, optional): Location of the colorbar. Default is 'right'.
+    - use_log_norm (bool, optional): If True, applies logarithmic normalization to the field data for color mapping. Default is False.
+    - pad: The colorbar padding. Default is 0.1.
+    - workers (int): Number of cores to use (default is -1, which uses all cores).
+    - scaling (int): Resolution to interpolate to compared to max reoslution, (e.g. scaling = 2 will plot at half the max resolution).
+
+    Returns:
+    - im
+    - fig (matplotlib.figure.Figure): The figure object containing the plot.
+    - ax (matplotlib.axes.Axes): The axis object with the plotted data.
+    """
+    center_x, center_y = data["center_x"], data["center_y"]
+
+    
+    radii = np.sqrt(center_x**2 + center_y**2)
+    rmin = np.min(radii)
+    rmax = np.max(radii)
+
+
+    resolution_x = resolution        
+    resolution_y = resolution        
+    
+    # Determine plot ranges
+    x_min = x_range[0] if x_range is not None else center_x.min()
+    x_max = x_range[1] if x_range is not None else center_x.max()
+    y_min = y_range[0] if y_range is not None else center_y.min()
+    y_max = y_range[1] if y_range is not None else center_y.max()
+    
+    # Calculate aspect ratio and grid dimensions
+    nx = resolution_x
+    ny = resolution_y
+    
+    
+    center_x, center_y, field_data = interpolate_to_grid_fast(data, field_data, Ngrid_x=nx, Ngrid_y=ny, 
+                                method='nearest', x_range=x_range, y_range=y_range,
+                                workers=workers)
+    
+    
+    
+    # Create 2D histogram with data values
+    x_bins = np.linspace(x_min, x_max, nx + 1)
+    y_bins = np.linspace(y_min, y_max, ny + 1)
+    
+    # Digitize points to bin indices
+    x_indices = np.digitize(center_x, x_bins) - 1
+    y_indices = np.digitize(center_y, y_bins) - 1
+    
+    # Create grid and accumulate values
+    grid = np.zeros((ny, nx))
+    count = np.zeros((ny, nx))
+    
+    # Use bincount2d-like approach for speed
+    valid = (x_indices >= 0) & (x_indices < nx) & (y_indices >= 0) & (y_indices < ny)
+    np.add.at(grid, (y_indices[valid], x_indices[valid]), field_data[valid])
+    np.add.at(count, (y_indices[valid], x_indices[valid]), 1)
+    
+    # # Average values in each cell (avoiding division by zero)
+    # mask = count > 0
+    # grid[mask] /= count[mask]
+    
+    grid = np.ma.masked_where(count == 0, grid)
+    
+    # Generate 2D “open” grid of centers in one shot:
+    yv, xv = np.ogrid[y_min:y_max:ny*1j,  x_min:x_max:nx*1j]
+
+    r2 = xv**2 + yv**2
+    mask = (r2 <= rmax**2) & (r2 > rmin**2)
+
+    grid = np.ma.masked_where(~mask, grid)
+
+    
+    if vmin == None:
+        vmin = np.min(field_data)
+        
+    if vmax == None:
+        vmax = np.max(field_data)
+    
+    # Create figure and axis if not provided
+    if fig is None or ax is None:
+        fig, ax = plt.subplots()
+        ax.set_xlabel('$x/R_{\\rm{NS}}$')
+        ax.set_ylabel('$y/R_{\\rm{NS}}$')
+        ax.set_aspect('equal')
+    
+    # Plot using imshow
+    im = ax.imshow(grid,
+                   origin='lower',
+                   extent=[x_min, x_max, y_min, y_max],
+                   vmin=vmin,
+                   vmax=vmax,
+                   cmap=cmap,
+                   norm='log' if use_log_norm else None,
+                   interpolation='none',
+                   interpolation_stage='data')
+    
+    # Add colorbar if label provided
+        # Add colorbar with 'extend' parameter determined from the data
+    if colorbar:
+        # Determine extend based on comparisons
+        extend_type = 'neither'  # Default
+        if np.any(field_data < vmin):
+            extend_type = 'min'
+        if np.any(field_data > vmax):
+            extend_type = 'max'
+        if np.any(field_data < vmin) and np.any(field_data > vmax):
+            extend_type = 'both'
+        cbar = plt.colorbar(im, ax=ax, extend=extend_type, 
+                            label=label, orientation=orientation, location=location, 
+                            pad=pad)
+        
+    
+    # Set plot limits
+    ax.set_xlim(center_x.min(), center_x.max())
+    ax.set_ylim(center_y.min(), center_y.max())
+
+
+    
+    return im, fig, ax
+
+
+
+
