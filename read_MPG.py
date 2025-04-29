@@ -260,6 +260,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.collections import PolyCollection
 from matplotlib.ticker import FuncFormatter
 from scipy.spatial import cKDTree
+from scipy.signal import savgol_filter
 
 
 
