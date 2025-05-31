@@ -2945,6 +2945,7 @@ def plot_cells_polar(data, fig=None, ax=None, linewidth=0.1, color='k',
 
 
 
+ 
 def plot_blocks_polar(data, fig=None, ax=None, linewidth=0.1, color='k', 
                              x_range=None, y_range=None, block_size=(16,8)):
     """
@@ -2981,22 +2982,6 @@ def plot_blocks_polar(data, fig=None, ax=None, linewidth=0.1, color='k',
     x_vals = x[cell_vertices]
     y_vals = y[cell_vertices]
 
-    # # Apply spatial filtering based on the provided x_range and y_range
-    # if x_range is not None:
-    #     x_mask = (x_vals.min(axis=1) >= x_range[0]) & (x_vals.max(axis=1) <= x_range[1])
-    # else:
-    #     x_mask = np.ones(ncells, dtype=bool)
-
-    # if y_range is not None:
-    #     y_mask = (y_vals.min(axis=1) >= y_range[0]) & (y_vals.max(axis=1) <= y_range[1])
-    # else:
-    #     y_mask = np.ones(ncells, dtype=bool)
-
-    # # Combine masks to filter cells
-    # valid_cells = x_mask & y_mask
-    # x_vals = x_vals[valid_cells]
-    # y_vals = y_vals[valid_cells]
-    # filtered_ncells = len(x_vals)
     
     r_vals = np.sqrt(x_vals**2 + y_vals**2)
     theta_vals = np.arctan2(y_vals, x_vals) 
@@ -3007,8 +2992,8 @@ def plot_blocks_polar(data, fig=None, ax=None, linewidth=0.1, color='k',
     for j in range(nblocks):
         r_list = []
         th_list = []
-        start = j * 128
-        end = start + 128
+        start = j * cells_in_block
+        end = start + cells_in_block
         for i in range(start, end):
             r_min, r_max, _, _ = r_vals[i]
             θ_min, _, θ_max, _ = theta_vals[i]
@@ -3023,11 +3008,11 @@ def plot_blocks_polar(data, fig=None, ax=None, linewidth=0.1, color='k',
 
         # Check if the block falls within the provided spatial range (x_range, y_range)
         if x_range is not None:
-            if (xmin < x_range[0]-0.25) or (xmax > x_range[1]+0.25):
+            if (xmax < x_range[0]) or (xmin > x_range[1]):
                 continue  # Skip this block if it lies entirely outside the x_range
 
         if y_range is not None:
-            if (ymin < y_range[0]-0.25) or (ymax > y_range[1]+0.25):
+            if (ymax < y_range[0]) or (ymin > y_range[1]):
                 continue  # Skip this block if it lies entirely outside the y_range
 
 
@@ -3063,5 +3048,4 @@ def plot_blocks_polar(data, fig=None, ax=None, linewidth=0.1, color='k',
     ax.set_ylim(y_range if y_range else (y.min(), y.max()))
 
     return fig, ax
-
 
