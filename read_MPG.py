@@ -2943,3 +2943,125 @@ def plot_cells_polar(data, fig=None, ax=None, linewidth=0.1, color='k',
 
     return fig, ax
 
+
+
+def plot_blocks_polar(data, fig=None, ax=None, linewidth=0.1, color='k', 
+                             x_range=None, y_range=None, block_size=(16,8)):
+    """
+    Optimized plotting of grid cells using LineCollection with optional spatial range filtering.
+    Works for polar simulation data outputted on Cartessian grid.
+    
+    Parameters:
+    - data: dictionary containing 'xpoint', 'ypoint', 'ncells', 'offsets', 'connectivity'
+    - fig: matplotlib figure object (optional)
+    - ax: matplotlib axis object (optional)
+    - linewidth: width of the boundary lines
+    - color: color of the boundary lines
+    - x_range: tuple (xmin, xmax) to limit plotted cells within x bounds (optional)
+    - y_range: tuple (ymin, ymax) to limit plotted cells within y bounds (optional)
+    """
+    # print('===============================')
+    # print("Started plotting grid cells")
+    # start_time = time.time()
+
+    x = data['xpoint']
+    y = data['ypoint']
+    ncells = data['ncells']
+    offsets = data['offsets']
+    connectivity = data['connectivity']
+
+    # Create mod_conn array using broadcasting
+    base_conn = connectivity[:np.max(offsets)]
+    num_iterations = int(4 * ncells / np.max(offsets))
+    offsets_array = np.arange(num_iterations) * (np.max(base_conn) + 1)
+    mod_conn = (base_conn + offsets_array[:, None]).ravel()[:ncells * 4]
+    cell_vertices = mod_conn.reshape(ncells, 4)
+
+    # Extract x and y coordinates for all cells at once
+    x_vals = x[cell_vertices]
+    y_vals = y[cell_vertices]
+
+    # # Apply spatial filtering based on the provided x_range and y_range
+    # if x_range is not None:
+    #     x_mask = (x_vals.min(axis=1) >= x_range[0]) & (x_vals.max(axis=1) <= x_range[1])
+    # else:
+    #     x_mask = np.ones(ncells, dtype=bool)
+
+    # if y_range is not None:
+    #     y_mask = (y_vals.min(axis=1) >= y_range[0]) & (y_vals.max(axis=1) <= y_range[1])
+    # else:
+    #     y_mask = np.ones(ncells, dtype=bool)
+
+    # # Combine masks to filter cells
+    # valid_cells = x_mask & y_mask
+    # x_vals = x_vals[valid_cells]
+    # y_vals = y_vals[valid_cells]
+    # filtered_ncells = len(x_vals)
+    
+    r_vals = np.sqrt(x_vals**2 + y_vals**2)
+    theta_vals = np.arctan2(y_vals, x_vals) 
+        
+    cells_in_block = block_size[0]*block_size[1]
+    segments = []
+    nblocks = int(ncells/cells_in_block)
+    for j in range(nblocks):
+        r_list = []
+        th_list = []
+        start = j * 128
+        end = start + 128
+        for i in range(start, end):
+            r_min, r_max, _, _ = r_vals[i]
+            θ_min, _, θ_max, _ = theta_vals[i]
+            r_list.append(r_min), r_list.append(r_max)
+            th_list.append(θ_min), th_list.append(θ_max)
+            
+        r_min, r_max = np.min(r_list), np.max(r_list)
+        θ_min, θ_max = np.min(th_list), np.max(th_list)
+        
+        xmin, xmax = np.min([r_min*np.cos(θ_min), r_min*np.cos(θ_max)]), np.max([r_max*np.cos(θ_min), r_max*np.cos(θ_max)])
+        ymin, ymax = np.min([r_min*np.sin(θ_min), r_min*np.sin(θ_max)]), np.max([r_max*np.sin(θ_min), r_max*np.sin(θ_max)])
+
+        # Check if the block falls within the provided spatial range (x_range, y_range)
+        if x_range is not None:
+            if (xmin < x_range[0]-0.25) or (xmax > x_range[1]+0.25):
+                continue  # Skip this block if it lies entirely outside the x_range
+
+        if y_range is not None:
+            if (ymin < y_range[0]-0.25) or (ymax > y_range[1]+0.25):
+                continue  # Skip this block if it lies entirely outside the y_range
+
+
+        # 1) constant‐r_min edge
+        p1 = (r_min * np.cos(θ_min), r_min * np.sin(θ_min))
+        p2 = (r_min * np.cos(θ_max), r_min * np.sin(θ_max))
+        segments.append([p1, p2])
+
+        # 2) constant‐r_max edge
+        p3 = (r_max * np.cos(θ_min), r_max * np.sin(θ_min))
+        p4 = (r_max * np.cos(θ_max), r_max * np.sin(θ_max))
+        segments.append([p3, p4])
+
+        # 3) constant‐θ_min edge
+        segments.append([p1, p3])
+
+        # 4) constant‐θ_max edge
+        segments.append([p2, p4])
+
+    # set up figure/axes if needed
+    if fig is None or ax is None:
+        fig, ax = plt.subplots()
+        ax.set_aspect('equal')
+        ax.set_xlabel('$x/R_{\\rm{NS}}$')
+        ax.set_ylabel('$z/R_{\\rm{NS}}$')
+
+    # add the collection
+    lc = LineCollection(segments, linewidths=linewidth, colors=color)
+    ax.add_collection(lc)
+
+    # fix limits in Cartesian
+    ax.set_xlim(x_range if x_range else (x.min(), x.max()))
+    ax.set_ylim(y_range if y_range else (y.min(), y.max()))
+
+    return fig, ax
+
+
