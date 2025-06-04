@@ -261,6 +261,8 @@ from matplotlib.collections import PolyCollection
 from matplotlib.ticker import FuncFormatter
 from scipy.spatial import cKDTree
 from scipy.signal import savgol_filter
+from matplotlib.patches import Wedge
+from matplotlib.collections import PatchCollection
 
 
 
@@ -3049,3 +3051,213 @@ def plot_blocks_polar(data, fig=None, ax=None, linewidth=0.1, color='k',
 
     return fig, ax
 
+
+
+
+
+def plot_raw_data_cells_polar(
+    data,
+    field_data,
+    fig=None,
+    ax=None,
+    x_range=None,
+    y_range=None,
+    vmin=None,
+    vmax=None,
+    cmap='viridis',
+    label=None,
+    edgecolors=None,
+    linewidths=0.1,
+    orientation='vertical',
+    location='right',
+    use_log_norm=False,
+    pad=0.1,
+    colorbar=True
+):
+    """
+    Plots raw polar‐grid simulation data by filling each cell as a true polar wedge
+    (i.e. curved at r_min and r_max, bounded by θ_min and θ_max).
+
+    Assumes:
+      - data['xpoint'], data['ypoint'] give Cartesian (x,y) of all vertices.
+      - data['connectivity'] groups vertices four‐at‐a‐time into each cell (in arbitrary order).
+      - We reconstruct each cell’s (r_min, r_max, θ_min, θ_max) from those four points,
+        then build a Wedge(center=(0,0), r_outer=r_max, θ1=θ_min_deg, θ2=θ_max_deg,
+        width=(r_max−r_min)).
+    
+    Parameters
+    ----------
+    data : dict
+        Must contain:
+          - 'xpoint' (ndarray, shape=(Nvertices,)):  Cartesian x of every vertex
+          - 'ypoint' (ndarray, shape=(Nvertices,)):  Cartesian y of every vertex
+          - 'ncells'   (int): number of cells
+          - 'offsets'  (ndarray): like in plot_cells_polar, offsets into connectivity
+          - 'connectivity' (ndarray): flattened vertex‐indices (4 per cell)
+    field_data : ndarray, shape=(ncells,)
+        Scalar used to color each wedge.
+    fig : matplotlib.figure.Figure, optional
+        If None, a new Figure is made.
+    ax : matplotlib.axes.Axes, optional
+        If None, a new Axes is created with aspect='equal'.
+    x_range : tuple (xmin, xmax), optional
+        Only keep cells whose 4 vertex‐x’s all lie within [xmin, xmax].
+    y_range : tuple (ymin, ymax), optional
+        Only keep cells whose 4 vertex‐y's all lie within [ymin, ymax].
+    vmin, vmax : float, optional
+        Colorbar limits. If None, use min/max of filtered field_data.
+    cmap : str or Colormap
+        Colormap for the wedges.
+    label : str, optional
+        Colorbar label.
+    edgecolors : color or None
+        Passed to PatchCollection, draws borders if not None.
+    linewidths : float
+        Border linewidth for each wedge.
+    orientation : {'vertical','horizontal'}
+        Colorbar orientation.
+    location : {'right','left','top','bottom'}
+        Colorbar placement.
+    use_log_norm : bool
+        If True, apply LogNorm(vmin,vmax).
+    pad : float
+        Padding between axes and colorbar.
+    colorbar : bool
+        If True, draw a colorbar.
+
+    Returns
+    -------
+    patch_collection : matplotlib.collections.PatchCollection
+    fig : Figure
+    ax : Axes
+    """
+    # ─── 1) Reconstruct “4 vertex indices per cell” just like in plot_cells_polar ─────
+    x_all = data['xpoint']   # shape (Nvertices,)
+    y_all = data['ypoint']   # shape (Nvertices,)
+    ncells = data['ncells']
+    offsets = data['offsets']
+    connectivity = data['connectivity']
+
+    # Build the same “cell_vertices” array (shape (ncells,4)):
+    max_offset = np.max(offsets)
+    base_conn = connectivity[:max_offset]
+    repeat_factor = int(4 * ncells / max_offset)
+    shifts = np.arange(repeat_factor) * (np.max(base_conn) + 1)
+    mod_conn = (base_conn + shifts[:, None]).ravel()
+    cell_vertices = mod_conn[: ncells * 4].reshape(ncells, 4)
+
+    # ─── 2) Extract the 4‐(x,y) points for each cell and range‐filter ───────────
+    x_vals_all = x_all[cell_vertices]   # shape (ncells,4)
+    y_vals_all = y_all[cell_vertices]   # shape (ncells,4)
+
+    # Build x‐mask / y‐mask if requested:
+    if x_range is not None:
+        x_min_per_cell = x_vals_all.min(axis=1)
+        x_max_per_cell = x_vals_all.max(axis=1)
+        x_mask = (x_max_per_cell > x_range[0]) & (x_min_per_cell < x_range[1])
+    else:
+        x_mask = np.ones(ncells, dtype=bool)
+
+    if y_range is not None:
+        y_min_per_cell = y_vals_all.min(axis=1)
+        y_max_per_cell = y_vals_all.max(axis=1)
+        y_mask = (y_max_per_cell > y_range[0]) & (y_min_per_cell < y_range[1])
+    else:
+        y_mask = np.ones(ncells, dtype=bool)
+
+    keep_mask = x_mask & y_mask
+    if not np.any(keep_mask):
+        # Nothing to draw
+        if fig is None or ax is None:
+            fig, ax = plt.subplots()
+            ax.set_aspect('equal')
+            ax.set_xlabel('$x/R_{\\rm NS}$')
+            ax.set_ylabel('$y/R_{\\rm NS}$')
+        return None, fig, ax
+
+    filtered_vertices = cell_vertices[keep_mask]    # (n_kept, 4)
+    filtered_field = field_data[keep_mask]          # (n_kept,)
+    x_vals = x_vals_all[keep_mask]                  # (n_kept,4)
+    y_vals = y_vals_all[keep_mask]                  # (n_kept,4)
+    n_kept = x_vals.shape[0]
+
+    # ─── 3) From those 4 Cartesian corners, recover (r,θ) and build a Wedge for each ─
+    # r = sqrt(x^2 + y^2), θ = atan2(y,x)
+    r_all = np.sqrt(x_vals**2 + y_vals**2)          # (n_kept,4)
+    theta_all = np.arctan2(y_vals, x_vals)          # (n_kept,4)
+
+    r_min = r_all.min(axis=1)      # (n_kept,)
+    r_max = r_all.max(axis=1)      # (n_kept,)
+    θ_min = theta_all.min(axis=1)  # (n_kept,)
+    θ_max = theta_all.max(axis=1)  # (n_kept,)
+
+    # Convert θ from radians → degrees, because Wedge expects degrees:
+    θ_min_deg = np.degrees(θ_min)  # (n_kept,)
+    θ_max_deg = np.degrees(θ_max)  # (n_kept,)
+
+    # Build one Wedge per cell: center=(0,0), radius=r_max[i], θ1=θ_min_deg[i], θ2=θ_max_deg[i], width=(r_max−r_min)
+    wedges = []
+    for i in range(n_kept):
+        wedge = Wedge(
+            center=(0.0, 0.0),
+            r=r_max[i],
+            theta1=θ_min_deg[i],
+            theta2=θ_max_deg[i],
+            width=(r_max[i] - r_min[i]),
+            edgecolor=edgecolors,
+            linewidth=linewidths
+        )
+        wedges.append(wedge)
+
+    # ─── 4) Figure/axes setup ────────────────────────────────────────────────────
+    if fig is None or ax is None:
+        fig, ax = plt.subplots()
+        ax.set_aspect('equal')
+        ax.set_xlabel('$x/R_{\\rm NS}$')
+        ax.set_ylabel('$y/R_{\\rm NS}$')
+
+    # ─── 5) Determine color limits ───────────────────────────────────────────────
+    if vmin is None:
+        vmin = np.min(filtered_field)
+    if vmax is None:
+        vmax = np.max(filtered_field)
+
+    # ─── 6) Build a PatchCollection from all wedges ─────────────────────────────
+    patch_collection = PatchCollection(
+        wedges,
+        cmap=cmap,
+        array=filtered_field,
+        norm=(LogNorm(vmin=vmin, vmax=vmax) if use_log_norm else None),
+        edgecolors=edgecolors,
+        linewidths=linewidths,
+        clim=(vmin, vmax),
+        match_original=True,
+        antialiased=False           # <– turn antialiasing OFF
+    )
+    ax.add_collection(patch_collection)
+
+    # ─── 7) Add colorbar if requested ───────────────────────────────────────────
+    if colorbar:
+        extend_type = 'neither'
+        if np.any(filtered_field < vmin) and np.any(filtered_field > vmax):
+            extend_type = 'both'
+        elif np.any(filtered_field < vmin):
+            extend_type = 'min'
+        elif np.any(filtered_field > vmax):
+            extend_type = 'max'
+
+        plt.colorbar(
+            patch_collection,
+            ax=ax,
+            extend=extend_type,
+            label=label,
+            orientation=orientation,
+            location=location,
+            pad=pad
+        )
+
+    # ─── 8) Fix axes limits to encompass all wedges  ───────────────────────
+    ax.set_xlim(x_range[0],x_range[1])
+    ax.set_ylim(y_range[0],y_range[1])
+
+    return patch_collection, fig, ax
