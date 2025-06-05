@@ -3053,8 +3053,6 @@ def plot_blocks_polar(data, fig=None, ax=None, linewidth=0.1, color='k',
 
 
 
-
-
 def plot_raw_data_cells_polar(
     data,
     field_data,
@@ -3208,6 +3206,7 @@ def plot_raw_data_cells_polar(
             linewidth=linewidths
         )
         wedges.append(wedge)
+    
 
     # ─── 4) Figure/axes setup ────────────────────────────────────────────────────
     if fig is None or ax is None:
@@ -3221,6 +3220,12 @@ def plot_raw_data_cells_polar(
         vmin = np.min(filtered_field)
     if vmax is None:
         vmax = np.max(filtered_field)
+        
+        
+    if edgecolors == None:
+        antialiased = False
+    else:
+        antialiased = True
 
     # ─── 6) Build a PatchCollection from all wedges ─────────────────────────────
     patch_collection = PatchCollection(
@@ -3232,7 +3237,7 @@ def plot_raw_data_cells_polar(
         linewidths=linewidths,
         clim=(vmin, vmax),
         match_original=True,
-        antialiased=False           # <– turn antialiasing OFF
+        antialiased=antialiased       
     )
     ax.add_collection(patch_collection)
 
