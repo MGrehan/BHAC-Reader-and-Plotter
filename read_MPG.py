@@ -263,7 +263,7 @@ from scipy.spatial import cKDTree
 from scipy.signal import savgol_filter
 from matplotlib.patches import Wedge
 from matplotlib.collections import PatchCollection
-
+import shlex, re
 
 
 
@@ -3266,3 +3266,73 @@ def plot_raw_data_cells_polar(
     ax.set_ylim(y_range[0],y_range[1])
 
     return patch_collection, fig, ax
+
+
+
+def read_log(filename):
+    """
+    Read an AMRVAC‑style run‑log with possible restart headers.
+
+    Returns
+    -------
+    np.recarray
+        Structured array so you can do `data['t']`, `data.dt`, etc.
+    """
+
+    # --- one pass to get the canonical header ----------------------------
+    with open(filename) as f:
+        _          = f.readline()          # run name
+        raw_header = f.readline().strip()  # first header
+
+    # Split while respecting single‑quoted field names
+    cols = shlex.split(raw_header.replace('|', ' | '))
+    cols = [c for c in cols if c != '|']
+
+    # Make safe, unique column names
+    def sanitize(name):
+        name = re.sub(r'[^0-9A-Za-z_]', '_', name)  # spaces, /, etc. → '_'
+        if name and name[0].isdigit():              # no leading digit
+            name = '_' + name
+        return name
+
+    clean_cols  = [sanitize(c) for c in cols]
+    n_expected  = len(clean_cols)
+
+    # Helper that turns a raw log line into a list of tokens
+    def split_log_line(line):
+        left, right = line.split('|', 1)
+        return left.split() + right.split()
+
+    # --- collect data rows, skipping any repeat headers ------------------
+    rows = []
+    with open(filename) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue                      # blank line
+            if '|' not in line:
+                continue                      # the first “doublegem_mhd23” or any stray line
+
+            tokens = split_log_line(line)
+            if len(tokens) != n_expected:     # wrong width → not data
+                continue
+
+            # Try to convert every element to a float; if that fails,
+            # it's a header (contains “it”, “dt”, …) and we skip it.
+            try:
+                row = [float(tok) for tok in tokens]
+            except ValueError:
+                continue                      # header hit during restart
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("No data rows found in file!")
+
+    # --- build a structured/record array ---------------------------------
+    arr   = np.array(rows, dtype=float).T       # shape (ncols, nrows)
+    dtype = [(name, float) for name in clean_cols]
+    data  = np.core.records.fromarrays(arr, dtype=dtype)
+    
+    data = data[np.argsort(data['t'])]
+
+    return data
