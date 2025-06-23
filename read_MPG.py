@@ -249,6 +249,8 @@ import numpy as np
 import xml.etree.ElementTree as ET
 import time
 import base64
+import mmap
+
 from scipy.integrate import cumtrapz
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import NearestNDInterpolator
@@ -3336,3 +3338,297 @@ def read_log(filename):
     data = data[np.argsort(data['t'])]
 
     return data
+
+
+
+def fast_vtu_reader_exp(filename, attr='all', blocks=False):
+    """
+    Reads a VTU file produced by BHAC for 2D simulations.
+    Memory-optimized version using memory mapping and selective parsing.
+
+    Parameters:
+    - filename: str, path to the VTU file.
+    - attr: list or 'all', attributes to extract (default is 'all').
+    - blocks: bool, whether to compute block boundaries for visualization (default is False).
+
+    Returns:
+    - data: dict, containing extracted points, attributes, and calculated cell centers.
+    - data_keys: list, names of the data arrays present in the file.
+    """
+    
+    print('===============================')
+    print(f"Starting to read file: {filename}")
+    
+    data = {}
+    
+    # Use memory mapping for efficient file access
+    with open(filename, 'rb') as f:
+        # Memory map the file
+        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mmapped_file:
+            # Find AppendedData section
+            appended_data_start = mmapped_file.find(b'<AppendedData encoding="raw">')
+            if appended_data_start == -1:
+                raise ValueError("AppendedData section not found")
+
+            data_start = mmapped_file.find(b'_', appended_data_start) + 1
+            
+            # Extract XML portion without loading entire file into memory
+            xml_content = mmapped_file[:appended_data_start].decode('utf-8', errors='ignore')
+            
+            # Parse XML in chunks to avoid memory issues
+            # First, let's extract just the metadata we need
+            data.update(_extract_metadata(xml_content))
+            
+            # Get piece information
+            pieces_info = _extract_pieces_info(xml_content)
+            
+            if not pieces_info:
+                raise ValueError("No pieces found in the VTU file")
+            
+            num_pieces = len(pieces_info)
+            total_cells = sum(piece['num_cells'] for piece in pieces_info)
+            print(f"Total number of cells: {total_cells}")
+            
+            # Determine which data arrays to extract
+            if attr == 'all':
+                data_array_names = _get_all_data_array_names(xml_content)
+                data_array_names.discard('types')  # Usually not needed
+            else:
+                data_array_names = set(attr)
+                data_array_names.add('connectivity')
+                data_array_names.add('offsets')
+            
+            # Extract binary data
+            binary_data = mmapped_file[data_start:]
+            
+            # Process each piece
+            points_data = []
+            block_boundaries = []
+            data_arrays = {name: [] for name in data_array_names}
+            
+            for piece_info in pieces_info:
+                # Parse this piece's XML
+                piece_xml = piece_info['xml']
+                piece_root = ET.fromstring(f"<Piece>{piece_xml}</Piece>")
+                
+                # Extract points for this piece
+                points_data_array = piece_root.find('.//Points/DataArray')
+                if points_data_array is not None:
+                    parsed_points = _parse_data_array(points_data_array, binary_data)
+                    points_data.append(parsed_points)
+                    
+                    if blocks:
+                        # Calculate block boundaries for this piece
+                        piece_points = parsed_points.reshape(-1, 3)
+                        x_min, y_min = np.min(piece_points[:, :2], axis=0)
+                        x_max, y_max = np.max(piece_points[:, :2], axis=0)
+
+                        corners = np.array([
+                            [x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max], [x_min, y_min]
+                        ])
+                        piece_boundaries = np.array([corners[:-1], corners[1:]]).transpose(1, 0, 2)
+                        block_boundaries.append(piece_boundaries)
+                
+                # Extract other data arrays for this piece
+                for name in data_array_names:
+                    data_array_elem = piece_root.find(f".//DataArray[@Name='{name}']")
+                    if data_array_elem is not None:
+                        parsed_data = _parse_data_array(data_array_elem, binary_data)
+                        data_arrays[name].append(parsed_data)
+
+    # Combine data from all pieces
+    if blocks:
+        data['block_coord'] = np.array(block_boundaries)
+
+    if points_data:
+        points = np.concatenate(points_data).reshape(-1, 3)
+        data['xpoint'], data['ypoint'], data['zpoint'] = points[:, 0], points[:, 1], points[:, 2]
+
+    # Combine data arrays
+    for name, arrays in data_arrays.items():
+        if arrays:
+            data[name] = np.concatenate(arrays)
+
+    data["ncells"] = total_cells
+    data["center_x"], data["center_y"] = calculate_cell_centers(data)
+    
+
+   
+    print(f"Finished reading file: {filename}")
+    print('===============================')
+
+    return data, list(data.keys())
+
+
+
+
+
+def _extract_metadata(xml_content):
+    """Extract metadata like time from XML content."""
+    data = {}
+    
+    # Try multiple approaches to find time field
+    time_found = False
+    
+    # Method 1: Look for TIME field in FieldData section
+    field_data_start = xml_content.find('<FieldData>')
+    if field_data_start != -1:
+        field_data_end = xml_content.find('</FieldData>', field_data_start)
+        if field_data_end != -1:
+            field_data_section = xml_content[field_data_start:field_data_end]
+            
+            # Look for TIME DataArray within FieldData
+            time_start = field_data_section.find('Name="TIME"')
+            if time_start != -1:
+                # Find the complete DataArray tag
+                array_start = field_data_section.rfind('<DataArray', 0, time_start)
+                if array_start != -1:
+                    array_end = field_data_section.find('</DataArray>', array_start)
+                    if array_end != -1:
+                        time_array_section = field_data_section[array_start:array_end + len('</DataArray>')]
+                        
+                        # Try to parse this as XML
+                        try:
+                            import xml.etree.ElementTree as ET
+                            time_elem = ET.fromstring(time_array_section)
+                            if time_elem.text:
+                                data['time'] = float(time_elem.text.strip())
+                                time_found = True
+                                print(f"Extracted time: {data['time']}")
+                        except:
+                            # Fallback to text extraction
+                            tag_end = time_array_section.find('>')
+                            close_tag_start = time_array_section.find('<', tag_end)
+                            if tag_end != -1 and close_tag_start != -1:
+                                time_text = time_array_section[tag_end + 1:close_tag_start].strip()
+                                try:
+                                    data['time'] = float(time_text)
+                                    time_found = True
+                                    print(f"Extracted time: {data['time']}")
+                                except ValueError:
+                                    pass
+    
+    
+    if not time_found:
+        print("No time field found in the file.")
+    
+    return data
+
+
+def _extract_pieces_info(xml_content):
+    """Extract piece information without loading full XML tree."""
+    pieces_info = []
+    
+    # Find all pieces
+    piece_start = 0
+    while True:
+        piece_start = xml_content.find('<Piece', piece_start)
+        if piece_start == -1:
+            break
+        
+        piece_end = xml_content.find('</Piece>', piece_start)
+        if piece_end == -1:
+            break
+        
+        piece_tag_end = xml_content.find('>', piece_start)
+        piece_tag = xml_content[piece_start:piece_tag_end + 1]
+        
+        # Extract attributes from piece tag
+        num_cells_start = piece_tag.find('NumberOfCells="')
+        num_points_start = piece_tag.find('NumberOfPoints="')
+        
+        num_cells = 0
+        num_points = 0
+        
+        if num_cells_start != -1:
+            num_cells_start += len('NumberOfCells="')
+            num_cells_end = piece_tag.find('"', num_cells_start)
+            num_cells = int(piece_tag[num_cells_start:num_cells_end])
+        
+        if num_points_start != -1:
+            num_points_start += len('NumberOfPoints="')
+            num_points_end = piece_tag.find('"', num_points_start)
+            num_points = int(piece_tag[num_points_start:num_points_end])
+        
+        # Extract piece content
+        piece_content = xml_content[piece_tag_end + 1:piece_end]
+        
+        pieces_info.append({
+            'num_cells': num_cells,
+            'num_points': num_points,
+            'xml': piece_content
+        })
+        
+        piece_start = piece_end + 1
+    
+    return pieces_info
+
+
+def _get_all_data_array_names(xml_content):
+    """Extract all DataArray names from XML content."""
+    data_array_names = set()
+    
+    # Find all DataArray tags
+    start = 0
+    while True:
+        start = xml_content.find('<DataArray', start)
+        if start == -1:
+            break
+        
+        end = xml_content.find('>', start)
+        if end == -1:
+            break
+        
+        tag = xml_content[start:end + 1]
+        
+        # Extract Name attribute
+        name_start = tag.find('Name="')
+        if name_start != -1:
+            name_start += len('Name="')
+            name_end = tag.find('"', name_start)
+            if name_end != -1:
+                name = tag[name_start:name_end]
+                data_array_names.add(name)
+        
+        start = end + 1
+    
+    return data_array_names
+
+
+def _parse_data_array(data_array, binary_content):
+    """
+    Helper function to parse a DataArray element.
+    
+    Parameters:
+    - data_array: XML element representing the DataArray
+    - binary_content: bytes, the binary data section of the file
+    
+    Returns:
+    - parsed_data: numpy array with the parsed data
+    """
+    dtype = data_array.get('type')
+    format = data_array.get('format')
+
+    if format == 'appended':
+        offset = int(data_array.get('offset', '0'))
+        size = struct.unpack('<I', binary_content[offset:offset+4])[0]
+        raw_data = binary_content[offset+4:offset+4+size]
+    elif format == 'ascii':
+        raw_data = data_array.text.strip().split()
+    else:  # Assume inline base64
+        raw_data = base64.b64decode(data_array.text.strip())
+
+    # Convert to appropriate numpy array
+    if dtype == 'Float32':
+        parsed_data = np.frombuffer(raw_data, dtype=np.float32) if format != 'ascii' else np.array(raw_data, dtype=np.float32)
+    elif dtype == 'Float64':
+        parsed_data = np.frombuffer(raw_data, dtype=np.float64) if format != 'ascii' else np.array(raw_data, dtype=np.float64)
+    elif dtype == 'Int32':
+        parsed_data = np.frombuffer(raw_data, dtype=np.int32) if format != 'ascii' else np.array(raw_data, dtype=np.int32)
+    elif dtype == 'Int64':
+        parsed_data = np.frombuffer(raw_data, dtype=np.int64) if format != 'ascii' else np.array(raw_data, dtype=np.int64)
+    else:
+        raise ValueError(f"Unsupported data type: {dtype}")
+
+    return parsed_data
+
