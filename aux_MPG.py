@@ -425,3 +425,134 @@ def calculate_cell_centers_3d(data):
     
 
     return cell_centers_x, cell_centers_y, cell_centers_z
+
+
+
+
+def calculate_derivatives_amr_vectorized(data, field_data, derivative_type='dx', n_neighbors=8, 
+                                       x_range=None, y_range=None):
+    """
+    Fully vectorized version for maximum speed.
+    
+    Parameters:
+    - data (dict): Dictionary with 'center_x' and 'center_y' arrays
+    - field_data (ndarray): 1D array of field values
+    - derivative_type (str): 'dx', 'dy', or 'gradient'
+    - n_neighbors (int): Number of nearest neighbors to use
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit derivative calculation 
+                                within specified x bounds. Cells outside get zero derivatives.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit derivative calculation 
+                                within specified y bounds. Cells outside get zero derivatives.
+        
+    Returns:
+    - derivative (ndarray or tuple): Derivative values same shape as field_data
+    """
+    
+    # Extract cell centers
+    x_centers = data['center_x']
+    y_centers = data['center_y']
+    ncells = len(x_centers)
+    
+    # Create mask for cells within specified ranges
+    range_mask = np.ones(ncells, dtype=bool)
+    if x_range is not None:
+        range_mask &= (x_centers >= x_range[0]) & (x_centers <= x_range[1])
+    if y_range is not None:
+        range_mask &= (y_centers >= y_range[0]) & (y_centers <= y_range[1])
+    
+    # Initialize outputs with zeros
+    if derivative_type == 'gradient':
+        dx_derivative = np.zeros(ncells)
+        dy_derivative = np.zeros(ncells)
+    else:
+        derivative = np.zeros(ncells)
+    
+    # Early return if no cells in range
+    cells_in_range = np.sum(range_mask)
+    if cells_in_range == 0:
+        if derivative_type == 'gradient':
+            return dx_derivative, dy_derivative
+        else:
+            return derivative
+    
+    # Build spatial tree only for cells in range (for efficiency)
+    filtered_indices = np.where(range_mask)[0]
+    x_filtered = x_centers[range_mask]
+    y_filtered = y_centers[range_mask]
+    
+    points_filtered = np.column_stack((x_filtered, y_filtered))
+    tree = cKDTree(points_filtered)
+    
+    # Get all neighbors at once for filtered cells
+    distances, neighbor_indices_filtered = tree.query(points_filtered, k=min(n_neighbors+1, len(points_filtered)))
+    neighbor_indices_filtered = neighbor_indices_filtered[:, 1:]  # Remove self
+    
+    # Map filtered neighbor indices back to original indices
+    neighbor_indices = filtered_indices[neighbor_indices_filtered]
+    
+    # Only process cells in range
+    n_filtered = len(filtered_indices)
+    if n_filtered == 0:
+        if derivative_type == 'gradient':
+            return dx_derivative, dy_derivative
+        else:
+            return derivative
+    
+    # Create arrays for vectorized operations (only for filtered cells)
+    # Shape: (n_filtered, n_neighbors)
+    x_neighbors = x_centers[neighbor_indices]
+    y_neighbors = y_centers[neighbor_indices]
+    f_neighbors = field_data[neighbor_indices]
+    
+    # Broadcast current cell values (only filtered cells)
+    x0 = x_filtered[:, np.newaxis]  # Shape: (n_filtered, 1)
+    y0 = y_filtered[:, np.newaxis]
+    f0 = field_data[filtered_indices][:, np.newaxis]
+    
+    # Calculate relative positions and field differences
+    dx = x_neighbors - x0  # Shape: (n_filtered, n_neighbors)
+    dy = y_neighbors - y0
+    df = f_neighbors - f0
+    
+    if derivative_type in ['dx', 'gradient']:
+        # Mask for valid x-derivatives (avoid division by zero)
+        x_mask = np.abs(dx) > 1e-10
+        
+        # Calculate derivatives only where mask is True
+        dx_ratios = np.where(x_mask, df / dx, 0.0)
+        weights_x = np.where(x_mask, 1.0 / (np.abs(dx) + 1e-10), 0.0)
+        
+        # Weighted average for each filtered cell
+        sum_weighted = np.sum(dx_ratios * weights_x, axis=1)
+        sum_weights = np.sum(weights_x, axis=1)
+        
+        dx_result = np.where(sum_weights > 0, sum_weighted / sum_weights, 0.0)
+        
+        if derivative_type == 'dx':
+            derivative[filtered_indices] = dx_result
+        else:
+            dx_derivative[filtered_indices] = dx_result
+    
+    if derivative_type in ['dy', 'gradient']:
+        # Mask for valid y-derivatives
+        y_mask = np.abs(dy) > 1e-10
+        
+        # Calculate derivatives only where mask is True
+        dy_ratios = np.where(y_mask, df / dy, 0.0)
+        weights_y = np.where(y_mask, 1.0 / (np.abs(dy) + 1e-10), 0.0)
+        
+        # Weighted average for each filtered cell
+        sum_weighted = np.sum(dy_ratios * weights_y, axis=1)
+        sum_weights = np.sum(weights_y, axis=1)
+        
+        dy_result = np.where(sum_weights > 0, sum_weighted / sum_weights, 0.0)
+        
+        if derivative_type == 'dy':
+            derivative[filtered_indices] = dy_result
+        else:
+            dy_derivative[filtered_indices] = dy_result
+    
+    if derivative_type == 'gradient':
+        return dx_derivative, dy_derivative
+    else:
+        return derivative
