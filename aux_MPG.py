@@ -77,6 +77,8 @@ plt.show()
 
 import numpy as np
 import finufft
+from scipy.spatial import cKDTree
+
 
 def compute_power_spectrum_2D(data: dict, field: np.ndarray, 
                               Ngrid_x: int = 256, Ngrid_y: int = 256, norm: str = "forward",
