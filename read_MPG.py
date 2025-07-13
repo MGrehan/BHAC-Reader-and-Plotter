@@ -2387,14 +2387,32 @@ def plot_cell_centers_fast(data, field_data, fig=None, ax=None,
         ax.set_xlabel('$x/L$')
         ax.set_ylabel('$y/L$')
     
-    # Plot using imshow
-    im = ax.imshow(grid,
+    # Create figure and axis if not provided
+    if fig is None or ax is None:
+        fig, ax = plt.subplots()
+        ax.set_aspect('equal')
+        ax.set_xlabel('$x/L$')
+        ax.set_ylabel('$y/L$')
+    
+    if use_log_norm:
+        norm = LogNorm(vmin=vmin, vmax=vmax)
+        # Plot using imshow
+        im = ax.imshow(grid,
+                        origin='lower',
+                        extent=[x_min, x_max, y_min, y_max],
+                        cmap=cmap,
+                        norm=norm,
+                        interpolation='none',
+                        interpolation_stage='data')
+    else:
+        norm = None   
+        # Plot using imshow
+        im = ax.imshow(grid,
                    origin='lower',
                    extent=[x_min, x_max, y_min, y_max],
                    vmin=vmin,
                    vmax=vmax,
                    cmap=cmap,
-                   norm='log' if use_log_norm else None,
                    interpolation='none',
                    interpolation_stage='data')
     
