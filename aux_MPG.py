@@ -558,3 +558,84 @@ def calculate_derivatives_amr_vectorized(data, field_data, derivative_type='dx',
         return dx_derivative, dy_derivative
     else:
         return derivative
+
+
+
+
+def area_average(data, variable, x_range=None, y_range=None):
+    """
+    Calculates area-weighted average of a variable using native AMR cell sizes.
+    
+    Parameters:
+    - data (dict): A dictionary containing the following keys:
+        - 'xpoint' (ndarray): 1D array of x-coordinates for cell vertices.
+        - 'ypoint' (ndarray): 1D array of y-coordinates for cell vertices.
+        - 'ncells' (int): The total number of cells.
+        - 'offsets' (ndarray): 1D array specifying the starting index of each cell's vertices.
+        - 'connectivity' (ndarray): 1D array that defines the connections between cell vertices.
+    - variable (ndarray): 1D array of variable values corresponding to each cell.
+    - x_range (tuple, optional): A tuple (xmin, xmax) to limit averaging to specified x bounds.
+    - y_range (tuple, optional): A tuple (ymin, ymax) to limit averaging to specified y bounds.
+    
+    Returns:
+    - float: The area-weighted average of the variable over the specified domain.
+    """
+
+    
+    # Extract data components
+    x = data['xpoint']
+    y = data['ypoint']
+    ncells = data['ncells']
+    connectivity = data['connectivity']
+    offsets = data['offsets']
+    
+    # Generate cell vertices using vectorized operations (same as in plot function)
+    max_offset = offsets.max()
+    base_conn = connectivity[:max_offset]
+    repeat_factor = int(4 * ncells / max_offset)
+    cell_vertices = (base_conn + (np.arange(repeat_factor) * (base_conn.max() + 1))[:, None]
+                    ).ravel()[:ncells*4].reshape(ncells, 4)
+    
+    # Precompute bounds for fast filtering
+    x_temp = x[cell_vertices]
+    y_temp = y[cell_vertices]
+    x_min, x_max = x_temp[:, 0], x_temp[:, 1]
+    y_min_cell, y_max_cell = y_temp[:, 0], y_temp[:, 2]
+    
+    # Vectorized range filtering
+    mask = np.ones(ncells, dtype=bool)
+    if x_range is not None:
+        mask &= (x_min >= x_range[0]) & (x_max <= x_range[1])
+    if y_range is not None:
+        mask &= (y_min_cell >= y_range[0]) & (y_max_cell <= y_range[1])
+    
+    # Apply masks to reduce computation
+    filtered_cells = cell_vertices[mask]
+    filtered_variable = variable[mask]
+    
+    # Calculate cell areas
+    # For rectangular cells: area = (x1 - x0) * (y2 - y0)
+    x_filtered = x[filtered_cells]
+    y_filtered = y[filtered_cells]
+    
+    # Extract corner coordinates (assuming rectangular cells)
+    x0, x1 = x_filtered[:, 0], x_filtered[:, 1]  # left, right
+    y0, y2 = y_filtered[:, 0], y_filtered[:, 2]  # bottom, top
+    
+    # Calculate areas
+    cell_areas = (x1 - x0) * (y2 - y0)
+    
+    # Calculate area-weighted average
+    # Average = sum(variable_i * area_i) / sum(area_i)
+    total_weighted_sum = np.sum(filtered_variable * cell_areas)
+    total_area = np.sum(cell_areas)
+    
+    if total_area == 0:
+        print("Warning: Total area is zero. Check your domain bounds.")
+        return np.nan
+    
+    area_weighted_average = total_weighted_sum / total_area
+    
+    
+    return area_weighted_average
+
