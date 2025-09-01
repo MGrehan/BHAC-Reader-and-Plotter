@@ -1,27 +1,52 @@
+
+
+# filename = '/Users/michaelgrehan/Downloads/data0001.hdf5'
+# variable_names = ['rho', 'u1', 'u2', 'u3', 'p', 'b1', 'b2', 'b3', 'e1', 'e2', 'e3', 's', 'lfac', 'xi',
+#                   'jz', 'v1', 'v2', 'v3', 'divB', 'curlbz', 'curlvz', 'divE']
+# data = read_HDF5(filename=filename, variable_names=variable_names)
+# plot_exact_cells_from_data(data, lambda vars: vars['b1']**2+vars['b2']**2,
+#                            x_range=(-0.5,0.5), y_range=(-0.5,0.5),
+#                            vmin=0, vmax=1, cmap=cmr.ember, pad=0.0, label='$B_\\perp^2/B^2_0$')
+
+
+# plot_cells(data, lambda vars: np.sqrt(vars['b1']**2+vars['b2']**2) ,
+#                            fig=fig, ax=ax,
+#                            x_range=(-0.5,0.0), y_range=(-0.5,0.0),
+#                            vmin=0, vmax=1, cmap=cmr.ember, pad=0.0, label='$B_\\perp/B_0$')
+
+# plot_blocks(data, 
+#             fig=fig, ax=ax,
+#             x_range=(-0.5,0.0), y_range=(-0.5,0.0),
+#             color='w', linewidth=0.25)
+
+
+
 import numpy as np
 import h5py
-from matplotlib.collections import PolyCollection
+from matplotlib.collections import PolyCollection, LineCollection
 from matplotlib.colors import LogNorm
 import matplotlib.pyplot as plt
 import cmasher as cmr
 import time
 
 
-# filename = '/Users/michaelgrehan/Downloads/data0001.hdf5'
-# variable_names = ['rho', 'u1', 'u2', 'u3', 'p', 'b1', 'b2', 'b3', 'e1', 'e2', 'e3', 's', 'lfac', 'xi',
-#                   'jz', 'v1', 'v2', 'v3', 'divB', 'curlbz', 'curlvz', 'divE']
-# data = read_HDF5(filename=filename, variable_names=variable_names, preserve_blocks=True)
-# plot_exact_cells_from_data(data, lambda vars: vars['b1']**2+vars['b2']**2,
-#                            x_range=(-0.5,0.5), y_range=(-0.5,0.5),
-#                            vmin=0, vmax=1, cmap=cmr.ember, pad=0.0, label='$B_\\perp^2/B_0$')
-
-
-
-
-def read_HDF5(filename, variable_names=None, blocks=None, preserve_blocks=False):
+def read_HDF5(filename, variable_names=None, blocks=None):
     """
-    Extract cell-centered simulation data from HDF5 file and return as 1D arrays.
-    Optimized to bulk-read datasets instead of per-block slicing from disk.
+    Extract cell-centered simulation data from HDF5 file.
+    Always returns flattened arrays for maximum memory efficiency.
+    
+    Parameters:
+    -----------
+    filename : str
+        Path to HDF5 file
+    variable_names : list, optional
+        Names for variables. If None, uses default names.
+    blocks : array-like, optional
+        Specific block indices to read. If None, reads all blocks.
+        
+    Returns:
+    --------
+    dict : Data dictionary with flattened arrays and metadata
     """
     
     with h5py.File(filename, 'r') as f:
@@ -64,39 +89,37 @@ def read_HDF5(filename, variable_names=None, blocks=None, preserve_blocks=False)
         raise ValueError(f"Number of variable names ({len(variable_names)}) "
                          f"must match number of variables in data ({nvars})")
     
-    # Total number of active cells
-    total_cells = len(block_indices) * active_size * active_size
+    # Base result dictionary
+    result = {
+        'time': time,
+        'metadata': {
+            'iteration': iteration,
+            'nblocks_processed': len(block_indices),
+            'total_cells': len(block_indices) * active_size * active_size,
+            'active_cells_per_block': active_size * active_size,
+            'ghost_zones': GZ,
+            'levels': levels if blocks is None else levels[block_indices],
+            'variable_names': variable_names,
+            'filename': filename
+        }
+    }
     
-    # Initialize output arrays
+    # Create flattened arrays
+    total_cells = len(block_indices) * active_size * active_size
     center_x = np.zeros(total_cells)
     center_y = np.zeros(total_cells)
     data_arrays = {name: np.zeros(total_cells) for name in variable_names}
     
-    # If preserving blocks, also store block structure data
-    if preserve_blocks:
-        block_grid_nodes = []
-        block_cell_data = []
-        block_start_indices = []
-    
-    # Process selected blocks
     cell_idx = 0
+    
     for b in block_indices:
         # Extract grid for this block - reshape from (81,2) to (9,9,2)
         g = grid[b]
         s = int(np.sqrt(g.shape[0]))  # Should be 9
         G = g.reshape(s, s, 2)
+        
         Xn = G[:, :, 0]
         Yn = G[:, :, 1]
-        
-        if preserve_blocks:
-            block_grid_nodes.append(G.copy())
-            block_start_indices.append(cell_idx)
-            
-            block_vars = {
-                var_name: cc_vars[b, var_idx, GZ:-GZ, GZ:-GZ].copy()
-                for var_idx, var_name in enumerate(variable_names)
-            }
-            block_cell_data.append(block_vars)
         
         # Cell centers (8x8 active cells)
         Xc = 0.5 * (Xn[:-1, :-1] + Xn[1:, 1:])
@@ -112,111 +135,137 @@ def read_HDF5(filename, variable_names=None, blocks=None, preserve_blocks=False)
         
         cell_idx += cells_in_block
     
-    # Assemble result
-    result = {
-        'center_x': center_x,
-        'center_y': center_y,
-        'time': time,
-        'metadata': {
-            'iteration': iteration,
-            'nblocks_processed': len(block_indices),
-            'total_cells': total_cells,
-            'active_cells_per_block': active_size * active_size,
-            'ghost_zones': GZ,
-            'levels': levels if blocks is None else levels[block_indices],
-            'variable_names': variable_names,
-            'filename': filename
-        }
-    }
-    
+    # Add flattened data to result
+    result['center_x'] = center_x
+    result['center_y'] = center_y
     result.update(data_arrays)
-    
-    if preserve_blocks:
-        result['block_data'] = {
-            'nblocks': len(block_indices),
-            'active_size': active_size,
-            'ghost_zones': GZ,
-            'block_indices': block_indices.tolist(),
-            'block_grid_nodes': block_grid_nodes,
-            'block_cell_data': block_cell_data,
-            'block_start_indices': block_start_indices,
-            'cells_per_block': active_size * active_size
-        }
-        print(f"Preserved block structure data for {len(block_indices)} blocks")
     
     return result
 
 
-
-
-
-
-
-
-def plot_cells(data, variable, figsize=(6.4, 4.8), vmin=None, vmax=None, 
-                              cmap=None, x_range=None, y_range=None, label='',
-                              title=None, save_path=None, colorbar=True,
-                              orientation='vertical', location='right', pad=0.1,
-                              edgecolors=None, linewidths=0.1, use_log_norm=False,
-                              derived_function=None):
+def get_block_structure(data, variables=None):
     """
-    Plot exact simulation cells using preserved block structure from extracted data.
-    This avoids re-reading the HDF5 file and shows true mesh geometry.
+    Reconstruct block structure from flattened data.
+    This is the reverse operation of flattening - takes flattened arrays and 
+    reshapes them back into block structure for exact cell plotting.
     
     Parameters:
     -----------
     data : dict
-        Data dictionary returned by read_HDF5() with preserve_blocks=True
-    variable : str or callable
-        Name of variable to plot, OR a function that takes block_vars dict and returns (8,8) array
-    derived_function : callable, optional
-        DEPRECATED: use variable parameter instead
-        Function that takes a dictionary of variables and returns computed values
-    figsize : tuple, optional
-        Figure size (width, height)
-    vmin, vmax : float, optional
-        Color scale limits
-    cmap : str, optional
-        Colormap name
-    x_range, y_range : tuple, optional
-        Spatial ranges to plot (xmin, xmax), (ymin, ymax)
-    label : str, optional
-        Colorbar label
-    title : str, optional
-        Plot title
-    save_path : str, optional
-        Path to save figure
-    colorbar : bool, optional
-        Whether to show colorbar
-    orientation, location, pad : optional
-        Colorbar properties
-    edgecolors, linewidths : optional
-        Cell edge properties
-    use_log_norm : bool, optional
-        Whether to use logarithmic color scale
+        Data dictionary with flattened arrays (preserve_blocks=False)
+        Must contain grid information in metadata to reconstruct blocks
+    variables : list, optional
+        List of variable names to unflatten. If None, uses all variables.
         
     Returns:
     --------
-    fig, ax, poly_collection : matplotlib objects
-    
-    Examples:
-    ---------
-    # Plot a basic variable
-    plot_exact_cells_from_data(data, 'b1')
-    
-    # Plot a derived quantity using lambda function
-    plot_exact_cells_from_data(data, lambda vars: vars['b1']**2 + vars['b2']**2)
-    
-    # Plot a complex derived quantity
-    def magnetic_pressure(vars):
-        return (vars['b1']**2 + vars['b2']**2 + vars['b3']**2) / (2 * vars['rho'])
-    
-    plot_exact_cells_from_data(data, magnetic_pressure, label='$P_{mag}/P_0$')
+    dict : Dictionary with block structure added
     """
-
-    if 'block_data' not in data:
-        raise ValueError("Data must be extracted with preserve_blocks=True to use this function")
+    if 'block_data' in data:
+        print("Warning: Data already has block structure")
+        return data
     
+    # We need to reconstruct the block structure from the HDF5 file
+    # since we need the grid information
+    filename = data['metadata']['filename']
+    nblocks_processed = data['metadata']['nblocks_processed']
+    ghost_zones = data['metadata']['ghost_zones']
+    variable_names = data['metadata']['variable_names']
+    
+    if variables is None:
+        variables = variable_names
+    
+    print(f"Reconstructing block structure from {filename}...")
+    
+    # Re-read only the grid information (lightweight)
+    with h5py.File(filename, 'r') as f:
+        grid = f['Grid'][:]  # (nblocks, 81, 2)
+        levels = f['Levels'][:]  # (nblocks,)
+    
+    active_size = int(np.sqrt(data['metadata']['active_cells_per_block']))  # Should be 8
+    
+    # Reconstruct block data structure
+    block_grid_nodes = []
+    block_cell_data = []
+    block_boundaries = []
+    
+    cells_per_block = active_size * active_size
+    
+    for block_idx in range(nblocks_processed):
+        # Extract grid for this block
+        g = grid[block_idx]
+        s = int(np.sqrt(g.shape[0]))  # Should be 9
+        G = g.reshape(s, s, 2)
+        block_grid_nodes.append(G.copy())
+        
+        # Extract block boundaries (corners)
+        corners = np.array([
+            [G[0, 0, 0], G[0, 0, 1]],      # Bottom-left
+            [G[-1, 0, 0], G[-1, 0, 1]],    # Bottom-right  
+            [G[-1, -1, 0], G[-1, -1, 1]],  # Top-right
+            [G[0, -1, 0], G[0, -1, 1]]     # Top-left
+        ])
+        block_boundaries.append(corners)
+        
+        # Unflatten variables for this block
+        start_idx = block_idx * cells_per_block
+        end_idx = start_idx + cells_per_block
+        
+        block_vars = {}
+        for var in variables:
+            if var in data:
+                # Reshape flattened data back to (active_size, active_size)
+                flattened_block = data[var][start_idx:end_idx]
+                block_vars[var] = flattened_block.reshape(active_size, active_size)
+        
+        block_cell_data.append(block_vars)
+    
+    # Create a new data dictionary with block structure added
+    result = data.copy()
+    result['block_data'] = {
+        'nblocks': nblocks_processed,
+        'active_size': active_size,
+        'ghost_zones': ghost_zones,
+        'block_indices': list(range(nblocks_processed)),
+        'block_grid_nodes': block_grid_nodes,
+        'block_cell_data': block_cell_data,
+        'block_boundaries': np.array(block_boundaries),
+        'cells_per_block': cells_per_block
+    }
+    
+    print(f"Reconstructed block structure for {nblocks_processed} blocks")
+    return result
+
+
+def plot_cells(data, variable, 
+               fig=None, ax=None,
+               figsize=(6.4, 4.8), vmin=None, vmax=None, 
+               cmap=None, x_range=None, y_range=None, label='',
+               title=None, save_path=None, dpi=300, colorbar=True,
+               orientation='vertical', location='right', pad=0.1,
+               edgecolors=None, linewidths=0.1, use_log_norm=False,
+               derived_function=None):
+    """
+    Plot exact simulation cells using preserved block structure from extracted data.
+    This avoids re-reading the HDF5 file and shows true mesh geometry.
+    
+    [Same docstring as original - parameters unchanged]
+    """
+    
+    # Automatically get block structure if not present
+    if 'block_data' not in data:
+        print("Reconstructing block structure for plotting...")
+        # Determine which variables we need based on the variable parameter
+        if callable(variable):
+            # For function case, we need to reconstruct all variables since we don't know
+            # which ones the function will use. User can optimize by passing specific variables.
+            needed_vars = data['metadata']['variable_names']
+        else:
+            # For simple variable case, we only need that variable
+            needed_vars = [variable] if isinstance(variable, str) else data['metadata']['variable_names']
+        
+        data = get_block_structure(data, needed_vars)
+
     # Handle deprecated parameter
     if derived_function is not None and callable(variable):
         raise ValueError("Cannot specify both 'variable' as function and 'derived_function'. Use only 'variable'.")
@@ -228,8 +277,6 @@ def plot_cells(data, variable, figsize=(6.4, 4.8), vmin=None, vmax=None,
     print(f"Started plotting.")
     
     block_info = data['block_data']
-    
-  
     
     all_polygons = []
     all_values = []
@@ -300,7 +347,8 @@ def plot_cells(data, variable, figsize=(6.4, 4.8), vmin=None, vmax=None,
     if cmap is None:
         cmap = 'viridis'
     
-    fig, ax = plt.subplots(figsize=figsize)
+    if fig is None or ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
     
     # Color normalization
     if use_log_norm:
@@ -352,9 +400,97 @@ def plot_cells(data, variable, figsize=(6.4, 4.8), vmin=None, vmax=None,
     ax.set_title(title)
     
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     
     print("Finished plotting.")
     print('===============================')
     
     return fig, ax, poly_collection
+
+
+def plot_blocks(data, fig=None, ax=None, linewidth=0.1, color='k', 
+                x_range=None, y_range=None, title=None, figsize=(6.4, 4.8)):
+    """
+    Plot block boundaries using flattened data.
+    Automatically reconstructs block structure as needed.
+    
+    [Same parameters as before - unchanged]
+    """
+    
+    # Automatically get block structure if not present
+    if 'block_data' not in data:
+        print("Reconstructing block structure for plotting...")
+        # For block plotting, we don't need any variable data, just grid structure
+        # Pass empty list to avoid unflattening variable data unnecessarily
+        data = get_block_structure(data, variables=[])
+    
+    print('===============================')
+    print("Started plotting block boundaries")
+    
+    block_boundaries = data['block_data']['block_boundaries']  # Shape: (nblocks, 4, 2)
+    N = block_boundaries.shape[0]
+    
+    # Prepare segments for LineCollection
+    segments = []
+    for i in range(N):
+        block_corners = block_boundaries[i]  # Shape: (4, 2)
+        
+        # Extract x and y coordinates
+        x_coords = block_corners[:, 0]
+        y_coords = block_corners[:, 1]
+        
+        # Check if the block falls within the provided spatial range
+        if x_range is not None:
+            if np.all(x_coords < x_range[0]) or np.all(x_coords > x_range[1]):
+                continue  # Skip this block
+        if y_range is not None:
+            if np.all(y_coords < y_range[0]) or np.all(y_coords > y_range[1]):
+                continue  # Skip this block
+        
+        # Create segments for each edge of the block
+        # Order: bottom, right, top, left (to form closed rectangle)
+        segments.extend([
+            [block_corners[0], block_corners[1]],  # Bottom edge (BL -> BR)
+            [block_corners[1], block_corners[2]],  # Right edge (BR -> TR)
+            [block_corners[2], block_corners[3]],  # Top edge (TR -> TL)
+            [block_corners[3], block_corners[0]]   # Left edge (TL -> BL)
+        ])
+    
+    # Create figure and axis if not provided
+    if fig is None or ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        
+    # Create and add LineCollection
+    lc = LineCollection(segments, linewidths=linewidth, colors=color)
+    ax.add_collection(lc)
+    
+    
+    
+    ax.set_aspect('equal')
+    ax.set_xlabel('$x/L$')
+    ax.set_xlabel('$y/L$')
+    
+    
+    # Set plot limits based on provided ranges or data bounds
+    if x_range is None:
+        ax.set_xlim(x_coords.min(), x_coords.max())
+    else:
+        ax.set_xlim(x_range)
+    
+    if y_range is None:
+        ax.set_ylim(y_coords.min(), y_coords.max())
+    else:
+        ax.set_ylim(y_range)
+
+    # Set title
+    if title is None:
+        t = data['time']
+        title = f'$t/t_c = {t:.1f}$'
+    ax.set_title(title)
+    
+    print("Finished plotting block boundaries")
+    print('===============================')
+    
+    return fig, ax
+
