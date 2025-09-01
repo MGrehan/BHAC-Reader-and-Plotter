@@ -249,7 +249,6 @@ def plot_cells(data, variable,
     Plot exact simulation cells using preserved block structure from extracted data.
     This avoids re-reading the HDF5 file and shows true mesh geometry.
     
-    [Same docstring as original - parameters unchanged]
     """
     
     # Automatically get block structure if not present
@@ -414,7 +413,6 @@ def plot_blocks(data, fig=None, ax=None, linewidth=0.1, color='k',
     Plot block boundaries using flattened data.
     Automatically reconstructs block structure as needed.
     
-    [Same parameters as before - unchanged]
     """
     
     # Automatically get block structure if not present
