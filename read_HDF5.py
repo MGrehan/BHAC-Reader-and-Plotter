@@ -4,12 +4,12 @@
 # variable_names = ['rho', 'u1', 'u2', 'u3', 'p', 'b1', 'b2', 'b3', 'e1', 'e2', 'e3', 's', 'lfac', 'xi',
 #                   'jz', 'v1', 'v2', 'v3', 'divB', 'curlbz', 'curlvz', 'divE']
 # data = read_HDF5(filename=filename, variable_names=variable_names)
-# plot_exact_cells_from_data(data, lambda vars: vars['b1']**2+vars['b2']**2,
+# plot_exact_cells_from_data(data, data['b1']**2+data['b2']**2,
 #                            x_range=(-0.5,0.5), y_range=(-0.5,0.5),
 #                            vmin=0, vmax=1, cmap=cmr.ember, pad=0.0, label='$B_\\perp^2/B^2_0$')
 
 
-# plot_cells(data, lambda vars: np.sqrt(vars['b1']**2+vars['b2']**2) ,
+# plot_cells(data, np.sqrt(data['b1']**2+data['b2']**2) ,
 #                            fig=fig, ax=ax,
 #                            x_range=(-0.5,0.0), y_range=(-0.5,0.0),
 #                            vmin=0, vmax=1, cmap=cmr.ember, pad=0.0, label='$B_\\perp/B_0$')
