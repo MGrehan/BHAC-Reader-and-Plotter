@@ -4,12 +4,12 @@
 # variable_names = ['rho', 'u1', 'u2', 'u3', 'p', 'b1', 'b2', 'b3', 'e1', 'e2', 'e3', 's', 'lfac', 'xi',
 #                   'jz', 'v1', 'v2', 'v3', 'divB', 'curlbz', 'curlvz', 'divE']
 # data = read_HDF5(filename=filename, variable_names=variable_names)
-# plot_exact_cells_from_data(data, data['b1']**2+data['b2']**2,
+# plot_exact_cells_from_data(data, lambda vars: vars['b1']**2+vars['b2']**2,
 #                            x_range=(-0.5,0.5), y_range=(-0.5,0.5),
 #                            vmin=0, vmax=1, cmap=cmr.ember, pad=0.0, label='$B_\\perp^2/B^2_0$')
 
 
-# plot_cells(data, np.sqrt(data['b1']**2+data['b2']**2) ,
+# plot_cells(data, lambda vars: np.sqrt(vars['b1']**2+vars['b2']**2) ,
 #                            fig=fig, ax=ax,
 #                            x_range=(-0.5,0.0), y_range=(-0.5,0.0),
 #                            vmin=0, vmax=1, cmap=cmr.ember, pad=0.0, label='$B_\\perp/B_0$')
@@ -338,12 +338,23 @@ def get_block_structure(data, variables=None):
         theta_tr = np.arctan2(tr[:, 1], tr[:, 0])
         theta_tl = np.arctan2(tl[:, 1], tl[:, 0])
         
+        # Stack all angles: shape (n, 4)
+        all_angles = np.stack([theta_bl, theta_br, theta_tr, theta_tl], axis=1)
+        # Unwrap along axis=1 (across the 4 corners for each block)
+        all_angles_unwrapped = np.unwrap(all_angles, axis=1)
+        # Extract back
+        theta_bl = all_angles_unwrapped[:, 0]
+        theta_br = all_angles_unwrapped[:, 1]
+        theta_tr = all_angles_unwrapped[:, 2]
+        theta_tl = all_angles_unwrapped[:, 3]
+        
         # Find wedge bounds
         rmin = np.minimum(np.minimum(r_bl, r_br), np.minimum(r_tr, r_tl))
         rmax = np.maximum(np.maximum(r_bl, r_br), np.maximum(r_tr, r_tl))
         theta_min = np.minimum(np.minimum(theta_bl, theta_br), np.minimum(theta_tr, theta_tl))
         theta_max = np.maximum(np.maximum(theta_bl, theta_br), np.maximum(theta_tr, theta_tl))
         
+            
         # Store wedge parameters instead of corner points
         # Format: (rmin, rmax, theta_min, theta_max) for each block
         block_boundaries = np.stack([rmin, rmax, theta_min, theta_max], axis=1)  # (n, 4)
@@ -388,6 +399,7 @@ def get_block_structure(data, variables=None):
 
 
 
+
 def plot_blocks(data, fig=None, ax=None, linewidth=0.1, color='k', 
                 x_range=None, y_range=None, title=None, figsize=(6.4, 4.8)):
     """
@@ -407,6 +419,7 @@ def plot_blocks(data, fig=None, ax=None, linewidth=0.1, color='k',
     coord_system = data['block_data']['coord_system']
     
     segments = []
+    patches = []  # <- CHANGE: Store patches in a list first
     
     if coord_system.lower() == 'cartesian':
         # Original cartesian logic
@@ -432,7 +445,6 @@ def plot_blocks(data, fig=None, ax=None, linewidth=0.1, color='k',
             
     elif coord_system.lower() == 'polar':
         # Polar wedge logic using Wedge patches
-        from matplotlib.patches import Wedge
         wedges = []
         
         for i in range(N):
@@ -468,18 +480,21 @@ def plot_blocks(data, fig=None, ax=None, linewidth=0.1, color='k',
                          width=rmax - rmin, facecolor='none', edgecolor=color, linewidth=linewidth)
             wedges.append(wedge)
         
-        patch_collection = PatchCollection(wedges, facecolors='none', 
-                                          edgecolors=color, linewidths=linewidth)
-        ax.add_collection(patch_collection)
+        patches = wedges  # <- CHANGE: Just store, don't add collection yet
     
-    # Create figure and axis if not provided
+    # FIX: Create figure and axis BEFORE adding collections
     if fig is None or ax is None:
         fig, ax = plt.subplots(figsize=figsize)
     
-    # Add LineCollection for cartesian
+    # FIX: Add collections AFTER axis exists
     if coord_system.lower() == 'cartesian' and segments:
         lc = LineCollection(segments, linewidths=linewidth, colors=color)
         ax.add_collection(lc)
+    elif patches:  # <- CHANGE: Check if we have patches to add
+        patch_collection = PatchCollection(patches, facecolors='none', 
+                                          edgecolors=color, linewidths=linewidth,
+                                          match_original=True)  # <- CHANGE: Added match_original
+        ax.add_collection(patch_collection)
     
     ax.set_aspect('equal')
     
@@ -496,7 +511,6 @@ def plot_blocks(data, fig=None, ax=None, linewidth=0.1, color='k',
             t = data['time']
             title = f'$t = {t:.1f}\\,$'+'$[R_{\\rm NS}/c]$'
     
-
     # Set plot limits
     if segments:
         all_points = np.array([pt for seg in segments for pt in seg])
@@ -509,15 +523,25 @@ def plot_blocks(data, fig=None, ax=None, linewidth=0.1, color='k',
             ax.set_ylim(all_points[:, 1].min(), all_points[:, 1].max())
         else:
             ax.set_ylim(y_range)
+    elif patches:  # <- CHANGE: Set limits for polar case
+        # Set limits based on block boundaries
+        if coord_system.lower() == 'polar':
+            rmax_all = block_boundaries[:, 1].max()
+            if x_range is None:
+                ax.set_xlim(-rmax_all * 1.1, rmax_all * 1.1)
+            else:
+                ax.set_xlim(x_range)
+            if y_range is None:
+                ax.set_ylim(-rmax_all * 1.1, rmax_all * 1.1)
+            else:
+                ax.set_ylim(y_range)
     
-
     ax.set_title(title)
     
     print("Finished plotting block boundaries")
     print('===============================')
     
     return fig, ax
- 
  
  
 def plot_cells(data, variable, 
@@ -527,7 +551,7 @@ def plot_cells(data, variable,
                title=None, save_path=None, dpi=300, colorbar=True,
                orientation='vertical', location='right', pad=0.1,
                edgecolors=None, linewidths=0.1, use_log_norm=False,
-               aspect=20, shrink=95):
+               aspect=20, shrink=0.95):
     """
     Plot exact simulation cells using preserved block structure from extracted data.
     Supports both cartesian and polar coordinate systems.
@@ -542,6 +566,10 @@ def plot_cells(data, variable,
     
     print('===============================')
     print(f"Started plotting ({coord_system}).")
+    
+    
+    if fig is None or ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
     
     # Ensure block structure available
     if 'block_data' not in data:
@@ -690,16 +718,24 @@ def plot_cells(data, variable,
             theta2 = np.arctan2(y2, x2)
             theta3 = np.arctan2(y3, x3)
             
-            # Find wedge bounds
+            # Find radial bounds (straightforward)
             rmin = np.minimum(np.minimum(r0, r1), np.minimum(r2, r3))
             rmax = np.maximum(np.maximum(r0, r1), np.maximum(r2, r3))
-            theta_min = np.minimum(np.minimum(theta0, theta1), np.minimum(theta2, theta3))
-            theta_max = np.maximum(np.maximum(theta0, theta1), np.maximum(theta2, theta3))
             
-            # Store as (rmin, rmax, theta_min_deg, theta_max_deg)
+            # FIX: Handle angle wrapping for theta bounds
+            # Unwrap angles relative to theta0 to handle 2π wraparound
+            theta1_unwrap = np.unwrap([theta0.ravel(), theta1.ravel()], axis=0)[1].reshape(theta0.shape)
+            theta2_unwrap = np.unwrap([theta0.ravel(), theta2.ravel()], axis=0)[1].reshape(theta0.shape)
+            theta3_unwrap = np.unwrap([theta0.ravel(), theta3.ravel()], axis=0)[1].reshape(theta0.shape)
+            
+            theta_min = np.minimum(np.minimum(theta0, theta1_unwrap), np.minimum(theta2_unwrap, theta3_unwrap))
+            theta_max = np.maximum(np.maximum(theta0, theta1_unwrap), np.maximum(theta2_unwrap, theta3_unwrap))
+            
+            # Convert to degrees
             theta_min_deg = np.degrees(theta_min)
             theta_max_deg = np.degrees(theta_max)
             
+            # Store as (rmin, rmax, theta_min_deg, theta_max_deg)
             block_cells = np.stack([rmin, rmax, theta_min_deg, theta_max_deg], axis=-1).reshape(-1, 4)
         
         else:
@@ -761,8 +797,6 @@ def plot_cells(data, variable,
     if cmap is None:
         cmap = 'viridis'
     
-    if fig is None or ax is None:
-        fig, ax = plt.subplots(figsize=figsize)
     
     if use_log_norm:
         if vmin <= 0:
