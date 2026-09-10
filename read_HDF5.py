@@ -45,10 +45,12 @@ from matplotlib.ticker import FuncFormatter
 from scipy.optimize import root_scalar
 
 
+
 def read_HDF5(filename, variable_names=None, blocks=None, coord_system='cartesian'):
     """
     Extract cell-centered simulation data from HDF5 file.
-    
+    Supports both 1D and 2D data, auto-detected from file contents.
+
     Parameters:
     -----------
     filename : str
@@ -59,62 +61,79 @@ def read_HDF5(filename, variable_names=None, blocks=None, coord_system='cartesia
         Specific block indices to read. If None, reads all blocks.
     coord_system : str, optional
         'cartesian' or 'polar'. Determines how cell centers are calculated.
-        
+        Only relevant for 2D data.
+
     Returns:
     --------
-    dict : Data dictionary with flattened arrays and metadata
+    dict : Data dictionary with flattened arrays and metadata.
+             Always contains 'center_x'. For 2D data also contains 'center_y'.
+             Also contains 'ndim' key indicating dimensionality.
     """
-    
+
     with h5py.File(filename, 'r') as f:
-        # Bulk read datasets once
-        cc_vars = f['Cell-centered Variables'][:]   # (nblocks, nvars, nx, ny)
-        grid = f['Grid'][:]                         # (nblocks, ngrid_points, 2)
-        levels = f['Levels'][:]                     # (nblocks,)
-        
-        # File attributes
-        GZ = int(f.attrs.get('GhostZones', 2))
-        time = f.attrs.get('Time', 0.0)
+        cc_vars = f['Cell-centered Variables'][:]   # (nblocks, nvars, nx) or (nblocks, nvars, nx, ny)
+        grid    = f['Grid'][:]                       # (nblocks, ngrid_pts) or (nblocks, ngrid_pts, 2)
+        levels  = f['Levels'][:]                     # (nblocks,)
+
+        GZ        = int(f.attrs.get('GhostZones', 2))
+        time_val  = f.attrs.get('Time', 0.0)
         iteration = f.attrs.get('Iteration', 0)
-        
-    # Work outside of file context (now all NumPy arrays in memory)
-    nblocks, nvars, block_size_x, block_size_y = cc_vars.shape
-    
-    # Determine grid dimensions from actual data
-    ngrid = grid.shape[1]
-    s = int(np.sqrt(ngrid))
-    if s * s == ngrid:
-        grid_nx, grid_ny = s, s
+
+    # ------------------------------------------------------------------ #
+    # Auto-detect dimensionality from cc_vars shape
+    # ------------------------------------------------------------------ #
+    if cc_vars.ndim == 3:
+        ndim = 1
+        nblocks, nvars, block_size_x = cc_vars.shape
+        block_size_y = 1
+    elif cc_vars.ndim == 4:
+        ndim = 2
+        nblocks, nvars, block_size_x, block_size_y = cc_vars.shape
     else:
-        # Find factors
-        factors = [(i, ngrid // i) for i in range(1, int(np.sqrt(ngrid)) + 1) if ngrid % i == 0]
-        grid_nx, grid_ny = min(factors, key=lambda x: abs(x[0] - x[1]))
-    
-    # Cells are one less than grid points in each direction
-    cells_nx = grid_nx - 1
-    cells_ny = grid_ny - 1
-    
-    # Active cells are total cells minus ghost zones on each side
-    active_nx = block_size_x - 2 * GZ
-    active_ny = block_size_y - 2 * GZ
-    
+        raise ValueError(f"Unexpected cc_vars shape: {cc_vars.shape}")
+
+    print(f"Detected {ndim}D data")
+
+    # ------------------------------------------------------------------ #
+    # Work out grid dimensions
+    # ------------------------------------------------------------------ #
+    if ndim == 1:
+        # grid shape: (nblocks, ngrid_pts) or (nblocks, ngrid_pts, 1)
+        if grid.ndim == 3:
+            grid = grid[:, :, 0]          # drop trailing size-1 dimension
+        ngrid_pts = grid.shape[1]         # number of grid points per block
+        grid_nx   = ngrid_pts             # 1-D: points along x
+        grid_ny   = 1
+
+        active_nx = block_size_x - 2 * GZ
+        active_ny = 1
+
+    else:  # 2D
+        ngrid = grid.shape[1]
+        s = int(np.sqrt(ngrid))
+        if s * s == ngrid:
+            grid_nx, grid_ny = s, s
+        else:
+            factors = [(i, ngrid // i) for i in range(1, int(np.sqrt(ngrid)) + 1)
+                       if ngrid % i == 0]
+            grid_nx, grid_ny = min(factors, key=lambda x: abs(x[0] - x[1]))
+
+        active_nx = block_size_x - 2 * GZ
+        active_ny = block_size_y - 2 * GZ
+
     print(f"Found {nblocks} blocks, {nvars} variables")
-    print(f"Ghost zones: {GZ}, Active cells per block: {active_nx}x{active_ny}")
-    print(f"Grid points per block: {grid_nx}x{grid_ny} ({ngrid} total)")
-    print(f"Coordinate system: {coord_system}")
-    
-    # Determine which blocks to process
-    if blocks is None:
-        block_indices = np.arange(nblocks)
-    else:
-        block_indices = np.array(blocks, dtype=int)
-        
-    # Set up variable names
+    print(f"Ghost zones: {GZ}, Active cells per block: {active_nx}" +
+          (f"x{active_ny}" if ndim == 2 else ""))
+    print(f"Coordinate system: {coord_system if ndim == 2 else 'N/A (1D)'}")
+
+    # ------------------------------------------------------------------ #
+    # Block selection and variable names
+    # ------------------------------------------------------------------ #
+    block_indices = np.arange(nblocks) if blocks is None else np.array(blocks, dtype=int)
+
     if variable_names is None:
-        known_names = [
-            'rho', 'u1', 'u2', 'u3', 'p',
-            'b1', 'b2', 'b3', 'e1', 'e2', 'e3', 's',
-            'lfac', 'xi'
-        ]
+        known_names = ['rho', 'u1', 'u2', 'u3', 'p',
+                       'b1', 'b2', 'b3', 'e1', 'e2', 'e3', 's', 'lfac', 'xi']
         variable_names = [
             known_names[i] if i < len(known_names) else f'var{i}'
             for i in range(nvars)
@@ -122,140 +141,126 @@ def read_HDF5(filename, variable_names=None, blocks=None, coord_system='cartesia
     elif len(variable_names) != nvars:
         raise ValueError(f"Number of variable names ({len(variable_names)}) "
                          f"must match number of variables in data ({nvars})")
-    
-    # # Base result dictionary
-    # result = {
-    #     'time': time,
-    #     'metadata': {
-    #         'iteration': iteration,
-    #         'nblocks_processed': len(block_indices),
-    #         'total_cells': len(block_indices) * active_nx * active_ny,
-    #         'active_cells_per_block': active_nx * active_ny,
-    #         'ghost_zones': GZ,
-    #         'levels': levels if blocks is None else levels[block_indices],
-    #         'variable_names': variable_names,
-    #         'filename': filename,
-    #         'grid_dimensions': (grid_nx, grid_ny),
-    #         'coord_system': coord_system
-    #     }
-    # }
-    
-    # Create flattened arrays
-    total_cells = len(block_indices) * active_nx * active_ny
-    center_x = np.zeros(total_cells)
-    center_y = np.zeros(total_cells)
-    data_arrays = {name: np.zeros(total_cells) for name in variable_names}
-    
-    cell_idx = 0
-    
-    
-    # Initialize boundary extrema
-    xmin_global = np.inf
-    xmax_global = -np.inf
-    ymin_global = np.inf
-    ymax_global = -np.inf
-    
-    for b in block_indices:
-        # Extract and reshape grid for this block
-        g = grid[b].reshape(grid_nx, grid_ny, 2)
-        
-        # Grid coordinates (corners of cells)
-        coord1 = g[:, :, 0]  # First coordinate (x or r)
-        coord2 = g[:, :, 1]  # Second coordinate (y or theta)
-        
-        if coord_system.lower() == 'cartesian':
-            # Cartesian: cell centers are simple averages of opposite corners
-            center_x_block = 0.5 * (coord1[:-1, :-1] + coord1[1:, 1:])
-            center_y_block = 0.5 * (coord2[:-1, :-1] + coord2[1:, 1:])
-            
-        elif coord_system.lower() == 'polar':
-            # Polar: cells are wedges. Grid is stored as (x, y), convert to (r, theta)
-            # Extract four corners of each cell
-            x1 = coord1[:-1, :-1]
-            x2 = coord1[1:, :-1]
-            x3 = coord1[:-1, 1:]
-            x4 = coord1[1:, 1:]
-            
-            y1 = coord2[:-1, :-1]
-            y2 = coord2[1:, :-1]
-            y3 = coord2[:-1, 1:]
-            y4 = coord2[1:, 1:]
-            
-            # Convert all four corners to polar
-            r1 = np.sqrt(x1**2 + y1**2)
-            r2 = np.sqrt(x2**2 + y2**2)
-            r3 = np.sqrt(x3**2 + y3**2)
-            r4 = np.sqrt(x4**2 + y4**2)
-            
-            theta1 = np.arctan2(y1, x1)
-            theta2 = np.arctan2(y2, x2)
-            theta3 = np.arctan2(y3, x3)
-            theta4 = np.arctan2(y4, x4)
-            
-            # Find wedge bounds
-            rmin = np.minimum(np.minimum(r1, r2), np.minimum(r3, r4))
-            rmax = np.maximum(np.maximum(r1, r2), np.maximum(r3, r4))
-            theta_min = np.minimum(np.minimum(theta1, theta2), np.minimum(theta3, theta4))
-            theta_max = np.maximum(np.maximum(theta1, theta2), np.maximum(theta3, theta4))
-            
-            # Cell center in polar coordinates
-            r_center = 0.5 * (rmin + rmax)
-            theta_center = 0.5 * (theta_min + theta_max)
-            
-            # Convert to Cartesian
-            center_x_block = r_center * np.cos(theta_center)
-            center_y_block = r_center * np.sin(theta_center)
-            
-        else:
-            raise ValueError(f"Unknown coordinate system: {coord_system}")
-        
-        # Update global boundaries using active cell boundaries
-        xmin_global = min(xmin_global, coord1.min())
-        xmax_global = max(xmax_global, coord1.max())
-        ymin_global = min(ymin_global, coord2.min())
-        ymax_global = max(ymax_global, coord2.max())
-        
-        cells_in_block = active_nx * active_ny
-        for var_idx, var_name in enumerate(variable_names):
-            var_data = cc_vars[b, var_idx, GZ:-GZ, GZ:-GZ]
-            data_arrays[var_name][cell_idx:cell_idx + cells_in_block] = var_data.ravel()
-        
-        center_x[cell_idx:cell_idx + cells_in_block] = center_x_block.ravel()
-        center_y[cell_idx:cell_idx + cells_in_block] = center_y_block.ravel()
-        
-        cell_idx += cells_in_block
 
+    # ------------------------------------------------------------------ #
+    # Allocate output arrays
+    # ------------------------------------------------------------------ #
+    cells_per_block = active_nx * active_ny
+    total_cells     = len(block_indices) * cells_per_block
+
+    center_x    = np.zeros(total_cells)
+    center_y    = np.zeros(total_cells) if ndim == 2 else None
+    data_arrays = {name: np.zeros(total_cells) for name in variable_names}
+
+    xmin_global = np.inf;  xmax_global = -np.inf
+    ymin_global = np.inf;  ymax_global = -np.inf
+
+    cell_idx = 0
+
+    # ------------------------------------------------------------------ #
+    # Main loop over blocks
+    # ------------------------------------------------------------------ #
+    for b in block_indices:
+
+        if ndim == 1:
+            # grid[b] shape: (ngrid_pts,) — coordinates of cell edges
+            coord1 = grid[b]                              # shape (ngrid_pts,)
+
+            # Cell centres: midpoints of adjacent edge pairs.
+            # The 1D grid only stores edges of *active* cells (no ghost edges),
+            # so this already gives exactly active_nx centres — no ghost stripping needed.
+            center_x_block = 0.5 * (coord1[:-1] + coord1[1:])  # shape (active_nx,)
+
+            xmin_global = min(xmin_global, coord1.min())
+            xmax_global = max(xmax_global, coord1.max())
+            
+            # Unpack variable data — shape (nvars, block_size_x)
+            for var_idx, var_name in enumerate(variable_names):
+                var_data = cc_vars[b, var_idx, GZ: GZ + active_nx]
+                data_arrays[var_name][cell_idx: cell_idx + active_nx] = var_data
+
+            center_x[cell_idx: cell_idx + active_nx] = center_x_block
+
+        if ndim == 2:  # 2D (original logic, unchanged)
+            g      = grid[b].reshape(grid_nx, grid_ny, 2)
+            coord1 = g[:, :, 0]
+            coord2 = g[:, :, 1]
+
+            if coord_system.lower() == 'cartesian':
+                center_x_block = 0.5 * (coord1[:-1, :-1] + coord1[1:, 1:])
+                center_y_block = 0.5 * (coord2[:-1, :-1] + coord2[1:, 1:])
+
+            elif coord_system.lower() == 'polar':
+                x1, x2 = coord1[:-1, :-1], coord1[1:, :-1]
+                x3, x4 = coord1[:-1,  1:], coord1[1:,  1:]
+                y1, y2 = coord2[:-1, :-1], coord2[1:, :-1]
+                y3, y4 = coord2[:-1,  1:], coord2[1:,  1:]
+
+                r1 = np.sqrt(x1**2 + y1**2);  r2 = np.sqrt(x2**2 + y2**2)
+                r3 = np.sqrt(x3**2 + y3**2);  r4 = np.sqrt(x4**2 + y4**2)
+
+                theta1 = np.arctan2(y1, x1);  theta2 = np.arctan2(y2, x2)
+                theta3 = np.arctan2(y3, x3);  theta4 = np.arctan2(y4, x4)
+
+                rmin = np.minimum(np.minimum(r1, r2), np.minimum(r3, r4))
+                rmax = np.maximum(np.maximum(r1, r2), np.maximum(r3, r4))
+                theta_min = np.minimum(np.minimum(theta1, theta2), np.minimum(theta3, theta4))
+                theta_max = np.maximum(np.maximum(theta1, theta2), np.maximum(theta3, theta4))
+
+                r_center     = 0.5 * (rmin + rmax)
+                theta_center = 0.5 * (theta_min + theta_max)
+
+                center_x_block = r_center * np.cos(theta_center)
+                center_y_block = r_center * np.sin(theta_center)
+
+            else:
+                raise ValueError(f"Unknown coordinate system: {coord_system}")
+
+            xmin_global = min(xmin_global, coord1.min())
+            xmax_global = max(xmax_global, coord1.max())
+            ymin_global = min(ymin_global, coord2.min())
+            ymax_global = max(ymax_global, coord2.max())
+
+            for var_idx, var_name in enumerate(variable_names):
+                var_data = cc_vars[b, var_idx, GZ:-GZ, GZ:-GZ]
+                data_arrays[var_name][cell_idx: cell_idx + cells_per_block] = var_data.ravel()
+
+            center_x[cell_idx: cell_idx + cells_per_block] = center_x_block.ravel()
+            center_y[cell_idx: cell_idx + cells_per_block] = center_y_block.ravel()
+
+        cell_idx += cells_per_block
+
+    # ------------------------------------------------------------------ #
+    # Build result dict
+    # ------------------------------------------------------------------ #
     result = {
-        'time': time,
+        'time': time_val,
+        'ndim': ndim,
         'metadata': {
-            'iteration': iteration,
-            'nblocks_processed': len(block_indices),
-            'total_cells': len(block_indices) * active_nx * active_ny,
-            'active_cells_per_block': active_nx * active_ny,
-            'ghost_zones': GZ,
-            'levels': levels if blocks is None else levels[block_indices],
-            'variable_names': variable_names,
-            'filename': filename,
-            'grid_dimensions': (grid_nx, grid_ny),
-            'coord_system': coord_system,
+            'iteration':              iteration,
+            'nblocks_processed':      len(block_indices),
+            'total_cells':            total_cells,
+            'active_cells_per_block': cells_per_block,
+            'ghost_zones':            GZ,
+            'levels':                 levels if blocks is None else levels[block_indices],
+            'variable_names':         variable_names,
+            'filename':               filename,
+            'grid_dimensions':        (grid_nx, grid_ny) if ndim == 2 else (grid_nx,),
+            'coord_system':           coord_system if ndim == 2 else 'cartesian',
             'xmin': xmin_global,
             'xmax': xmax_global,
-            'ymin': ymin_global,
-            'ymax': ymax_global
+            **({'ymin': ymin_global, 'ymax': ymax_global} if ndim == 2 else {}),
         }
     }
-    
-    # Add flattened data to result
-    result['center_x'] = center_x
-    result['center_y'] = center_y
-    
-    result['coord_system'] = coord_system
-    
-    result.update(data_arrays)
-    
-    
-    return result
 
+    result['center_x'] = center_x
+    if ndim == 2:
+        result['center_y'] = center_y
+
+    result['coord_system'] = coord_system if ndim == 2 else 'cartesian'
+    result.update(data_arrays)
+
+    return result
 
 
 
